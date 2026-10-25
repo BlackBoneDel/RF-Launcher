@@ -514,10 +514,10 @@ Además, dos limitaciones de medición ya consignadas en §6/E.3 y §6/E.4: el �
 | Ítem | Valor |
 |---|---|
 | SHA resultante (código) | `2e0ca8a4c96510ae64028dd2094c7a11bb4c2991` |
-| SHA con este informe | se añade en el commit final (documentación, sin cambios de código) |
-| Commits añadidos por la auditoría | **5** (`2d6c1df`, `e4b96d1`, `d412964`, `2e0ca8a` + informe) |
+| SHA final (con este informe) | `74688d78bda8d20d0e31b61e477eb389f307bf0f` — commits posteriores son exclusivamente de documentación; `git diff --stat 2e0ca8a..HEAD -- ':!AUDITORIA-FASE-3A.md'` = vacío |
+| Commits añadidos por la auditoría | **5–6** (`2d6c1df`, `e4b96d1`, `d412964`, `2e0ca8a`, informe `74688d7` + posible commit de esta línea) |
 | PR | [#3](https://github.com/BlackBoneDel/RF-Launcher/pull/3) — **OPEN / DRAFT / MERGEABLE**, sin merge |
-| CI tras todos los cambios | **VERDE en los 3 SO** — [40244256181](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40244256181): Windows ✅, macOS ✅, Ubuntu ✅; guardia anti-diagnóstico ✅ en los 3 |
+| CI tras todos los cambios | **VERDE en los 3 SO** — código: [40244256181](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40244256181); con el informe incluido: [40244978287](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40244978287). Windows ✅, macOS ✅, Ubuntu ✅; guardia anti-diagnóstico ✅ en los 3 |
 | Tests | 29 (27 por job + 2 smoke en Linux), 0 fallos |
 | Cobertura Parte E | 6/6 celdas verificadas con evidencia; 0 bloqueadas |
 | Bloqueado esperando decisión del usuario | **Sí, 3 cosas:** (1) migración Tauri 1→2 (Parte B), (2) criterio del 100% de RAM (Parte C), (3) unificación camelCase del cable (N-6) |
