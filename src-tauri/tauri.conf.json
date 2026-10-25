@@ -15,9 +15,14 @@
       "all": false
     },
     "bundle": {
-      "active": false,
+      "active": true,
+      "targets": "all",
       "identifier": "dev.rf.launcher",
-      "icon": []
+      "icon": [
+        "icons/icon.png",
+        "icons/icon.ico",
+        "icons/icon.icns"
+      ]
     },
     "security": {
       "csp": null

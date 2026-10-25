@@ -101,8 +101,12 @@ pub async fn set_global_config(
         }
         let total = total_ram_mb();
         match validate_ram_max(requested as u64, total) {
-            RamValidation::Exceeds { requested, total } => {
-                return Err(LauncherError::RamExceedsPhysical { requested, total }.into())
+            RamValidation::Exceeds { requested_mb, total_mb } => {
+                return Err(LauncherError::RamExceedsPhysical {
+                    requested: requested_mb,
+                    total: total_mb,
+                }
+                .into())
             }
             RamValidation::Warn { requested_mb, total_mb } => {
                 return Ok(RamCheck {

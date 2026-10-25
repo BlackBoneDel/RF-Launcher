@@ -157,7 +157,7 @@ pub async fn resolve(
 
     // 5. Fabric Loader: su jar va al frente del classpath y su main class
     //    reemplaza a la de vanilla, recibiendo la original por propiedad de sistema.
-    let (main_class, mut jvm_args) = if let Some(loader_version) = fabric_loader {
+    let (main_class, jvm_args) = if let Some(loader_version) = fabric_loader {
         let loader_jar = assets_dir
             .join("fabric-loader")
             .join(format!("fabric-loader-{loader_version}.jar"));
@@ -167,8 +167,8 @@ pub async fn resolve(
             download_file(&loader_url, &loader_jar, None).await?;
         }
         classpath.insert(0, loader_jar);
-        jvm_args.push(format!("-Dfabric.mainClass={main_class}"));
-        ("net.fabricmc.loader.impl.launch.knot.KnotClient".to_string(), jvm_args)
+        let extra = vec![format!("-Dfabric.mainClass={main_class}")];
+        ("net.fabricmc.loader.impl.launch.knot.KnotClient".to_string(), extra)
     } else {
         (main_class, Vec::new())
     };

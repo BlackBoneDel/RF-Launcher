@@ -117,7 +117,7 @@ jobs:
           for i, line in enumerate(lines):
               plain = re.sub(r"\x1b\[[0-9;]*m", "", line)
               if re.search(r"(^error|^warning|-->\s|could not compile|expected .* found)", plain):
-                  keep.extend(lines[i:i+4])
+                  keep.extend(lines[i:i+14])
           if keep:
               text = "\n".join(keep)
           text = text[-48000:]
