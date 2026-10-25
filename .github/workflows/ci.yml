@@ -89,18 +89,37 @@ jobs:
         continue-on-error: true
         run: python3 -c "import urllib.request; print(urllib.request.urlopen('https://api.github.com/', timeout=15).status)"
 
-      - name: Diagnostico C se puede crear issue
+      - name: Diagnostico C crear issue con cargo_build.log
         if: failure()
         continue-on-error: true
         run: |
           python3 - <<'EOF'
-          import os, urllib.request, json
+          import os, sys, urllib.request, urllib.error, json
           token = os.environ.get("GITHUB_TOKEN", "")
-          payload = json.dumps({"title": "diag C ${{ matrix.os }}", "body": "prueba"}).encode()
-          req = urllib.request.Request("https://api.github.com/repos/BlackBoneDel/RF-Launcher/issues", data=payload, headers={"Authorization": "token " + token, "Accept": "application/vnd.github+json", "User-Agent": "rf-launcher-ci", "Content-Type": "application/json"}, method="POST")
+          try:
+              body_log = open("src-tauri/cargo_build.log").read()
+          except Exception as e:
+              body_log = f"No se pudo leer src-tauri/cargo_build.log: {e}"
+          if len(body_log) > 60000:
+              body_log = body_log[-60000:]
+          body = f"Error de cargo build --release en ${{ matrix.os }}:\n\n```\n{body_log}\n```\n"
+          payload = json.dumps({"title": "fallo build: ${{ matrix.os }}", "body": body}).encode()
+          req = urllib.request.Request(
+              "https://api.github.com/repos/BlackBoneDel/RF-Launcher/issues",
+              data=payload,
+              headers={"Authorization": "token " + token,
+                       "Accept": "application/vnd.github+json",
+                       "User-Agent": "rf-launcher-ci",
+                       "Content-Type": "application/json"},
+              method="POST",
+          )
           try:
               with urllib.request.urlopen(req, timeout=15) as resp:
-                  open("/tmp/diag_c_ok.txt", "w").write("OK " + str(resp.status))
+                  print("Issue creado HTTP", resp.status)
+          except urllib.error.HTTPError as e:
+              print("GitHub API HTTP", e.code, e.read().decode()[:300])
+              sys.exit(1)
           except Exception as e:
-              open("/tmp/diag_c_ok.txt", "w").write("ERROR " + repr(e))
+              print("Excepción:", repr(e))
+              sys.exit(1)
           EOF
