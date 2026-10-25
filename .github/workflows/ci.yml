@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust compilation cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rf-launcher-${{ matrix.os }}"
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependencias de sistema (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.0-dev
+
+      - name: Instalar dependencias de frontend
+        run: npm ci
+        working-directory: frontend
+
+      - name: Type-check y build del frontend (Vite)
+        run: npm run build
+        working-directory: frontend
+
+      - name: Build del backend Rust (release)
+        run: cargo build --release
+        working-directory: src-tauri
+
+      - name: Ejecutar tests de Rust (motor de configuración, instancia, RAM, mapeo Java)
+        run: cargo test
+        working-directory: src-tauri
+
+      - name: Smoke test: descarga real de Java 21 desde Adoptium (solo Linux)
+        if: runner.os == 'Linux'
+        run: cargo test ensure_java_21_downloads_from_adoptium -- --nocapture
+        working-directory: src-tauri
+
+      - name: Línea base de RAM del launcher en reposo (solo Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y xvfb
+          xvfb-run -a ./target/release/rf-launcher &
+          PID=$!
+          sleep 10
+          echo "=== RSS del launcher en reposo (sin instancias) ==="
+          if [ -d "/proc/$PID" ]; then grep -E 'VmRSS|VmSize|VmPeak' /proc/$PID/status || true; else echo "El proceso no está ejecutándose"; fi
+          kill $PID 2>/dev/null || true
+          wait $PID 2>/dev/null || true

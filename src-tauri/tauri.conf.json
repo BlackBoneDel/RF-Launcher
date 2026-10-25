@@ -1,0 +1,29 @@
+{
+  "productName": "RF Launcher",
+  "version": "0.1.0",
+  "identifier": "dev.rf.launcher",
+  "build": {
+    "frontendDist": "../frontend/dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "cd ../frontend && npm run dev",
+    "beforeBuildCommand": "cd ../frontend && npm run build",
+    "buildCommand": "cd ../frontend && npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "RF Launcher",
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "minWidth": 900,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null,
+      "capabilities": ["default"]
+    }
+  },
+  "plugins": []
+}
