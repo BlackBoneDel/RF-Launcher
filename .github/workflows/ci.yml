@@ -79,40 +79,28 @@ jobs:
           kill $PID 2>/dev/null || true
           wait $PID 2>/dev/null || true
 
-      - name: Diagnosticar fallo publicar log en issue de GitHub
+      - name: Diagnostico A GITHUB_TOKEN presente
         if: failure()
+        continue-on-error: true
+        run: test -n "${GITHUB_TOKEN}"
+
+      - name: Diagnostico B api.github.com alcanzable
+        if: failure()
+        continue-on-error: true
+        run: python3 -c "import urllib.request; print(urllib.request.urlopen('https://api.github.com/', timeout=15).status)"
+
+      - name: Diagnostico C se puede crear issue
+        if: failure()
+        continue-on-error: true
         run: |
-          {
-            echo "## cargo_build.log ($(date -u))"
-            cat src-tauri/cargo_build.log 2>/dev/null || true
-            echo "## cargo_test.log"
-            cat src-tauri/cargo_test.log 2>/dev/null || true
-            echo "## apt.log"
-            cat apt.log 2>/dev/null || true
-            echo "## apt_packages.log"
-            cat apt_packages.log 2>/dev/null || true
-            echo "## npm_ci.log"
-            cat frontend/npm_ci.log 2>/dev/null || true
-            echo "## npm_build.log"
-            cat frontend/npm_build.log 2>/dev/null || true
-          } > /tmp/ci_diag.log
-          if [ "$(wc -c < /tmp/ci_diag.log)" -gt 60000 ]; then
-            tail -c 60000 /tmp/ci_diag.log > /tmp/ci_diag.trunc && mv /tmp/ci_diag.trunc /tmp/ci_diag.log
-          fi
           python3 - <<'EOF'
           import os, urllib.request, json
           token = os.environ.get("GITHUB_TOKEN", "")
-          payload = json.dumps({"title": "diagnostico-minimal ${{ matrix.os }}", "body": "token: " + ("presente" if token else "AUSENTE") + "\nrunner: ${{ matrix.os }}"}).encode()
-          req = urllib.request.Request(
-              "https://api.github.com/repos/BlackBoneDel/RF-Launcher/issues",
-              data=payload,
-              headers={"Authorization": "token " + token, "Accept": "application/vnd.github+json", "User-Agent": "rf-launcher-ci", "Content-Type": "application/json"},
-              method="POST",
-          )
+          payload = json.dumps({"title": "diag C ${{ matrix.os }}", "body": "prueba"}).encode()
+          req = urllib.request.Request("https://api.github.com/repos/BlackBoneDel/RF-Launcher/issues", data=payload, headers={"Authorization": "token " + token, "Accept": "application/vnd.github+json", "User-Agent": "rf-launcher-ci", "Content-Type": "application/json"}, method="POST")
           try:
-              with urllib.request.urlopen(req) as resp:
-                  open("/tmp/diag_status.txt", "w").write("OK " + str(resp.status))
+              with urllib.request.urlopen(req, timeout=15) as resp:
+                  open("/tmp/diag_c_ok.txt", "w").write("OK " + str(resp.status))
           except Exception as e:
-              open("/tmp/diag_status.txt", "w").write("ERROR " + repr(e))
+              open("/tmp/diag_c_ok.txt", "w").write("ERROR " + repr(e))
           EOF
-          cat /tmp/diag_status.txt
