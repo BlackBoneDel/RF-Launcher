@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
-use crate::error::{LauncherError, Result};
+use crate::error::Result;
 use crate::instance::Instance;
 use crate::ram::process_exists;
 
@@ -90,9 +90,8 @@ impl Launcher {
             .stdin(Stdio::null());
 
         let child = cmd.spawn()?;
-        let pid = child
-            .id()
-            .ok_or_else(|| LauncherError::Custom("java no devolvió un PID".into()))?;
+        // En Rust actual, `Child::id()` devuelve u32 directamente (no Option).
+        let pid = child.id();
 
         self.running.insert(
             instance.id,

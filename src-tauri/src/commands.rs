@@ -170,8 +170,8 @@ pub async fn set_instance_config(
         }
     }
 
-    let mut inner = state.inner.lock().map_err(|e| LauncherError::Custom(e.to_string()))?;
-    let mut instance = Instance::load(&inner.instances_dir, &uuid)?;
+        let inner = state.inner.lock().map_err(|e| LauncherError::Custom(e.to_string()))?;
+        let mut instance = Instance::load(&inner.instances_dir, &uuid)?;
     instance.set_override(config_key, value.clone());
     instance.save(&inner.instances_dir)?;
     Ok(RamCheck {

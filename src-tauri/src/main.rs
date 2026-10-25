@@ -20,9 +20,10 @@ use crate::state::{AppState, Inner};
 
 fn main() {
     tauri::Builder::default()
-        .setup(|app| {
-            // Se usa `expect` en lugar de `?` para no depender del tipo exacto
-            // de error que el closure `setup` de Tauri 1 acepta en cada versión.
+        .setup(|app| -> std::result::Result<(), Box<dyn std::error::Error>> {
+            // Tauri 1 exige que el closure devuelva Result<(), Box<dyn Error>>.
+            // Se usa `expect` en el interior para no tener que convertir cada
+            // error concreto a ese tipo.
             let handle = app.handle();
             let data_dir = handle
                 .path_resolver()
@@ -55,6 +56,7 @@ fn main() {
             app.handle().manage(AppState {
                 inner: Mutex::new(inner),
             });
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_theme,
