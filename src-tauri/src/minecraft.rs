@@ -109,7 +109,6 @@ pub async fn resolve(
         if !rules_apply(lib) {
             continue;
         }
-        let name = lib.get("name").and_then(|v| v.as_str());
         let downloads = lib.get("downloads");
 
         // Artefacto principal

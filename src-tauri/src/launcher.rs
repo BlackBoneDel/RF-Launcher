@@ -269,7 +269,7 @@ mod tests {
                 .expect("no se pudo lanzar sleep")
         };
 
-        let pid = child.id().expect("el proceso debe tener PID");
+        let pid = child.id(); // u32 directo, no Option
         assert!(
             process_exists(pid),
             "el proceso recién lanzado debe existir en la tabla de procesos"

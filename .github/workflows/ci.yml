@@ -103,24 +103,25 @@ jobs:
           python3 - <<'EOF'
           import os
           paths = ["src-tauri/cargo_build.log", "src-tauri/cargo_test.log", "src-tauri/cargo_smoke.log"]
-          text = ""
+          import re
+          blocks = []
+          tail = ""
           for p in paths:
-              if os.path.exists(p):
-                  text += "\n===== " + p + " =====\n" + open(p, errors="replace").read()
-          if not text.strip():
-              text = "No se encontraron logs de cargo."
-          # Nos quedamos sólo con las líneas de error y su contexto inmediato
-          # para que las anotaciones quepan y sean legibles.
-          import re, subprocess
-          keep = []
-          lines = text.splitlines()
-          for i, line in enumerate(lines):
-              plain = re.sub(r"\x1b\[[0-9;]*m", "", line)
-              if re.search(r"(^error|^warning|-->\s|could not compile|expected .* found)", plain):
-                  keep.extend(lines[i:i+14])
-          if keep:
-              text = "\n".join(keep)
-          text = text[-48000:]
+              if not os.path.exists(p):
+                  continue
+              raw = open(p, errors="replace").read()
+              clean = re.sub(r"\x1b\[[0-9;]*m", "", raw)
+              lines = clean.splitlines()
+              for i, line in enumerate(lines):
+                  # Sólo ERRORES: los warnings ahogaban el diagnóstico.
+                  if re.match(r"^error(\[|:)", line) or "could not compile" in line:
+                      blocks.append(f"### {p}:{i+1}\n" + "\n".join(lines[i:i+18]))
+              tail = clean[-1500:]
+          if blocks:
+              text = "\n\n".join(blocks)
+          else:
+              text = "(sin líneas 'error' detectadas; cola de los logs)\n" + tail
+          text = text[:47000]
           def enc(s):
               return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
           size = 12000

@@ -3,7 +3,7 @@ use sysinfo::{Pid, System};
 /// RAM física total de la máquina en MB. sysinfo lee el valor real del SO
 /// (Linux: /proc/meminfo; Windows: GlobalMemoryStatusEx; macOS: hw.memsize).
 pub fn total_ram_mb() -> u64 {
-    let mut system = System::new_all();
+    let system = System::new_all();
     system.total_memory() / 1024 / 1024
 }
 
