@@ -309,7 +309,7 @@ jobs:
               failed = [l for l in lines if "FAILED" in l]
               markers = [l for l in lines if re.search(
                   r"(ADOPTIUM_SMOKE|ADOPTIUM_API|ADOPTIUM_DOWNLOAD|MOJANG_SMOKE|"
-                  r"KILL_TEST_CHILD_RSS_KB|RAM_FISICA_MB|"
+                  r"RETRY_TEST|KILL_TEST_CHILD_RSS_KB|RAM_FISICA_MB|"
                   r"kill_really_terminates|truncated_download|interrupted_install)", l)]
               notice("evidence-tests", f"[{p}]\n" + "\n".join((results + failed[:8] + markers[:14]) or ["sin datos"]))
               phys = [l for l in lines if "RAM_FISICA_MB=" in l]

@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -10,6 +10,35 @@ use sha2::{Digest, Sha256};
 use crate::error::Result;
 
 const ADOPTIUM_BASE: &str = "https://api.adoptium.net/v3";
+
+/// Reintenta una petición HTTP hasta 3 veces con backoff, registrando cada
+/// intento. La auditoría de Fase 3-A detectó un fallo de red transitorio en
+/// el runner macOS arm64 (run 40242984273): sin reintentos, una sola ráfaga
+/// de red convierte un smoke test válido en un rojo. Se usa tanto para la API
+/// de Adoptium como para la descarga del artefacto.
+async fn send_with_retries(
+    builder: reqwest::RequestBuilder,
+    label: &str,
+) -> Result<reqwest::Response> {
+    let mut last = String::new();
+    for attempt in 1..=3u32 {
+        let Some(request) = builder.try_clone() else {
+            return Err(format!("{label}: no se pudo clonar la petición HTTP").into());
+        };
+        match request.send().await {
+            Ok(response) => {
+                println!("{label}_ATTEMPT_OK={attempt} STATUS={}", response.status());
+                return Ok(response);
+            }
+            Err(e) => {
+                last = e.to_string();
+                println!("{label}_ATTEMPT_ERR={attempt} error={last}");
+                std::thread::sleep(Duration::from_millis(500 * attempt as u64));
+            }
+        }
+    }
+    Err(format!("{label}: 3 intentos fallidos; ultimo error: {last}").into())
+}
 const MOJANG_VERSION_MANIFEST: &str =
     "https://launchermeta.mojang.com/mc/game/version_manifest.json";
 
@@ -159,9 +188,10 @@ impl JavaManager {
                 ("heap_size", "normal"),
                 ("page_size", "20"),
             ])
-            .header("User-Agent", "rf-launcher/0.1");
+            .header("User-Agent", "rf-launcher/0.1")
+            .timeout(Duration::from_secs(60));
 
-        match request.send().await {
+        match send_with_retries(request, "ADOPTIUM_API").await {
             Ok(response) => {
                 let status = response.status();
                 println!("ADOPTIUM_API_STATUS={status}");
@@ -216,12 +246,12 @@ impl JavaManager {
     /// (deducida de la URL final tras las redirecciones), para que la
     /// extracción sepa si es tar.gz o zip.
     async fn download(&self, asset: &AdoptiumAsset) -> Result<PathBuf> {
-        let response = reqwest::Client::new()
+        let request = reqwest::Client::new()
             .get(&asset.link)
             .header("User-Agent", "rf-launcher/0.1")
-            .send()
-            .await
-            .map_err(|e| format!("ADOPTIUM_DOWNLOAD_ERR url={} error={e}", asset.link))?
+            .timeout(Duration::from_secs(600));
+        let response = send_with_retries(request, "ADOPTIUM_DOWNLOAD")
+            .await?
             .error_for_status()?;
         println!(
             "ADOPTIUM_DOWNLOAD_FINAL_URL={} STATUS={}",
@@ -633,6 +663,22 @@ mod tests {
     #[test]
     fn java_mapping_unknown_is_error() {
         assert!(java_version_for_minecraft("abc").is_err());
+    }
+
+    /// Regresión offline de los reintentos: un puerto cerrado en loopback
+    /// falla siempre, así que se puede comprobar que hay un límite y que el
+    /// error final menciona los 3 intentos. No depende de red externa.
+    #[tokio::test]
+    async fn http_retries_are_bounded_and_report_last_error() {
+        let builder = reqwest::Client::new()
+            .get("http://127.0.0.1:1/never")
+            .timeout(Duration::from_secs(2));
+        let msg = match send_with_retries(builder, "RETRY_TEST").await {
+            Ok(_) => panic!("un puerto cerrado no puede devolver Ok"),
+            Err(e) => e.to_string(),
+        };
+        assert!(msg.contains("3 intentos fallidos"), "{msg}");
+        println!("RETRY_TEST_RESULT={msg}");
     }
 
     #[test]
