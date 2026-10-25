@@ -77,7 +77,7 @@ jobs:
           kill $PID 2>/dev/null || true
           wait $PID 2>/dev/null || true
 
-      - name: Diagnosticar fallo: crear issue con los logs
+      - name: Diagnosticar fallo crear issue con los logs
         if: failure()
         run: |
           {
