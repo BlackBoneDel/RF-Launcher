@@ -19,11 +19,11 @@
         "minWidth": 900,
         "minHeight": 600
       }
-    ],
-    "security": {
-      "csp": null,
-      "capabilities": ["default"]
-    }
+    ]
+  },
+  "security": {
+    "csp": null,
+    "capabilities": ["default"]
   },
   "plugins": []
 }

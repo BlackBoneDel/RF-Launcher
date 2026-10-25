@@ -77,19 +77,24 @@ jobs:
           kill $PID 2>/dev/null || true
           wait $PID 2>/dev/null || true
 
-      - name: Subir logs de diagnóstico si falló algo
+      - name: Diagnosticar fallo: crear issue con los logs
         if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-logs-${{ matrix.os }}
-          path: |
-            apt.log
-            apt_packages.log
-            frontend/npm_ci.log
-            frontend/npm_build.log
-            src-tauri/cargo_build.log
-            src-tauri/cargo_test.log
-            src-tauri/cargo_smoke.log
-            src-tauri/xvfb.log
-            src-tauri/launcher_ram.log
-          retention-days: 7
+        run: |
+          {
+            echo "## cargo_build.log"; cat src-tauri/cargo_build.log 2>/dev/null || true
+            echo "## cargo_test.log"; cat src-tauri/cargo_test.log 2>/dev/null || true
+            echo "## apt.log"; cat apt.log 2>/dev/null || true
+            echo "## apt_packages.log"; cat apt_packages.log 2>/dev/null || true
+            echo "## npm_ci.log"; cat frontend/npm_ci.log 2>/dev/null || true
+            echo "## npm_build.log"; cat frontend/npm_build.log 2>/dev/null || true
+            echo "## cargo_smoke.log"; cat src-tauri/cargo_smoke.log 2>/dev/null || true
+            echo "## launcher_ram.log"; cat src-tauri/launcher_ram.log 2>/dev/null || true
+          } > /tmp/ci_diag.log
+          if [ "$(wc -c < /tmp/ci_diag.log)" -gt 50000 ]; then
+            tail -c 50000 /tmp/ci_diag.log > /tmp/ci_diag_trunc.log
+            mv /tmp/ci_diag_trunc.log /tmp/ci_diag.log
+          fi
+          gh api --method POST repos/BlackBoneDel/RF-Launcher/issues \
+            -f title="CI falló en ${{ matrix.os }}" \
+            -F body=@/tmp/ci_diag.log \
+            || echo "No se pudo crear el issue de diagnóstico"
