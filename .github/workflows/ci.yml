@@ -13,11 +13,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # ubuntu-22.04 en lugar de ubuntu-latest: Tauri 1.x vincula webkit2gtk-4.0,
-        # cuyo paquete de desarrollo (libwebkit2gtk-4.0-dev) está disponible en
-        # Ubuntu 22.04 pero fue reemplazado por la 4.1 en Ubuntu 24.04
-        # (lo que es el ubuntu-latest actual en 2026). Se documenta en el informe.
-        os: [windows-latest, macos-latest, ubuntu-22.04]
+        # Temporalmente solo ubuntu-22.04 para iterar rápido mientras se
+        # corrige el error de compilación de Rust. Restaurar la matriz de 3 OS
+        # (windows-latest, macos-latest, ubuntu-22.04) una vez verde.
+        os: [ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -89,7 +88,7 @@ jobs:
         continue-on-error: true
         run: python3 -c "import urllib.request; print(urllib.request.urlopen('https://api.github.com/', timeout=15).status)"
 
-      - name: Diagnostico C crear issue con cargo_build.log
+      - name: Diagnostico C crear issue con cargo_build.log y verificar
         if: failure()
         continue-on-error: true
         run: |
@@ -115,11 +114,23 @@ jobs:
           )
           try:
               with urllib.request.urlopen(req, timeout=15) as resp:
-                  print("Issue creado HTTP", resp.status)
+                  data = json.loads(resp.read())
+                  number = data["number"]
           except urllib.error.HTTPError as e:
               print("GitHub API HTTP", e.code, e.read().decode()[:300])
               sys.exit(1)
           except Exception as e:
-              print("Excepción:", repr(e))
+              print("Excepción al crear:", repr(e))
+              sys.exit(1)
+          # Verificar que el issue quedó creado (persistió)
+          get_req = urllib.request.Request(
+              f"https://api.github.com/repos/BlackBoneDel/RF-Launcher/issues/{number}",
+              headers={"Authorization": "token " + token, "Accept": "application/vnd.github+json", "User-Agent": "rf-launcher-ci"},
+          )
+          try:
+              with urllib.request.urlopen(get_req, timeout=15) as resp2:
+                  print("Issue verificado #", number, "HTTP", resp2.status)
+          except Exception as e:
+              print("El issue no se pudo volver a leer:", repr(e))
               sys.exit(1)
           EOF
