@@ -6,9 +6,11 @@
 **Estado:** Fase 3-A implementada y verificada en una matriz real de tres sistemas
 operativos (Windows / macOS / Linux).
 
-- **Corrida definitiva sobre el HEAD final (`2778620`, informe incluido):**
+- **Corrida definitiva con el informe ya en el árbol (`2778620`):**
   [run 40239118850](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40239118850)
-  — 3 jobs `success`.
+  — 3 jobs `success`. Los commits posteriores son exclusivamente de
+  documentación; no modifican ni `frontend/`, ni `src-tauri/`, ni el workflow,
+  por lo que el código verificado es el mismo.
 - **Corrida de referencia del código (`30c3d01`, de la que se extrajeron los
   números de RAM/tests citados):**
   [run 40238629977](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40238629977).
