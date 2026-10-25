@@ -164,7 +164,7 @@ pub async fn resolve(
         fs::create_dir_all(loader_jar.parent().unwrap())?;
         if !loader_jar.exists() {
             let loader_url = format!("{FABRIC_MAVEN}/{loader_version}/fabric-loader-{loader_version}.jar");
-            download_file(loader_url, &loader_jar, None).await?;
+            download_file(&loader_url, &loader_jar, None).await?;
         }
         classpath.insert(0, loader_jar);
         jvm_args.push(format!("-Dfabric.mainClass={main_class}"));

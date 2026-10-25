@@ -39,6 +39,12 @@ impl From<&str> for LauncherError {
     }
 }
 
+impl From<String> for LauncherError {
+    fn from(s: String) -> Self {
+        LauncherError::Custom(s)
+    }
+}
+
 impl serde::Serialize for LauncherError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

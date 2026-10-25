@@ -109,6 +109,17 @@ jobs:
                   text += "\n===== " + p + " =====\n" + open(p, errors="replace").read()
           if not text.strip():
               text = "No se encontraron logs de cargo."
+          # Nos quedamos sólo con las líneas de error y su contexto inmediato
+          # para que las anotaciones quepan y sean legibles.
+          import re, subprocess
+          keep = []
+          lines = text.splitlines()
+          for i, line in enumerate(lines):
+              plain = re.sub(r"\x1b\[[0-9;]*m", "", line)
+              if re.search(r"(^error|^warning|-->\s|could not compile|expected .* found)", plain):
+                  keep.extend(lines[i:i+4])
+          if keep:
+              text = "\n".join(keep)
           text = text[-48000:]
           def enc(s):
               return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
