@@ -1,11 +1,17 @@
 # RF Launcher — Fase 3-A: Núcleo de Gestión de Instancias
 
 **Fecha:** 2026-10-25 · **Repositorio:** `BlackBoneDel/RF-Launcher` ·
-**Branch:** `arena/2412f038-rf-launcher` · **Commit final:** `30c3d015fb837378ab016b719d829e71ffa9fdff`
+**Branch:** `arena/2412f038-rf-launcher` · **Commit final:** `2778620` (código verificado en `30c3d015fb837378ab016b719d829e71ffa9fdff`)
 
 **Estado:** Fase 3-A implementada y verificada en una matriz real de tres sistemas
-operativos (Windows / macOS / Linux). Corrida final verde:
-[run 40238629977](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40238629977).
+operativos (Windows / macOS / Linux).
+
+- **Corrida definitiva sobre el HEAD final (`2778620`, informe incluido):**
+  [run 40239118850](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40239118850)
+  — 3 jobs `success`.
+- **Corrida de referencia del código (`30c3d01`, de la que se extrajeron los
+  números de RAM/tests citados):**
+  [run 40238629977](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40238629977).
 
 ---
 
@@ -146,6 +152,16 @@ Corrida final verde, commit `30c3d015`:
 | Ubuntu 22.04 (Linux 6.8.0-azure) | [job 121305448272](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40238629977/job/121305448272) | [annotations](https://api.github.com/repos/BlackBoneDel/RF-Launcher/check-runs/121305448272/annotations) | `25 passed; 0 failed` · 2 smoke `1 passed` · `RAM_FISICA_MB=15988` · VmRSS 91500 kB |
 
 Run completo: [40238629977](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40238629977).
+
+**Corrida definitiva sobre el commit final `2778620`** (idéntica en código;
+solo añade este informe), igualmente con 3 jobs verdes:
+
+| SO | Job |
+|---|---|
+| Windows | [job 121306919391](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40239118850/job/121306919391) |
+| Ubuntu | [job 121306919530](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40239118850/job/121306919530) |
+| macOS | [job 121306919646](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40239118850/job/121306919646) |
+
 Ejemplo de evidencia fallida (para contraste): [40236919866](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40236919866).
 Corridas verdes previas: `40237313439`, `40237684461`, `40238204012`.
 
