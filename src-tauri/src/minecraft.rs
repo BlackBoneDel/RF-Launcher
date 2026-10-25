@@ -4,6 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+use sha1::{Digest, Sha1};
 
 use crate::error::{LauncherError, Result};
 

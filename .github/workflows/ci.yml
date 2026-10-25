@@ -12,7 +12,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        # ubuntu-22.04 en lugar de ubuntu-latest: Tauri 1.x vincula webkit2gtk-4.0,
+        # cuyo paquete de desarrollo (libwebkit2gtk-4.0-dev) está disponible en
+        # Ubuntu 22.04 pero fue reemplazado por la 4.1 en Ubuntu 24.04
+        # (lo que es el ubuntu-latest actual en 2026). Se documenta en el informe.
+        os: [windows-latest, macos-latest, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
