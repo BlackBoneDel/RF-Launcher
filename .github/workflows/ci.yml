@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   build-and-test:
@@ -44,10 +45,11 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.0-dev > apt_packages.log 2>&1 || sudo apt-get install -y libwebkit2gtk-4.1-dev >> apt_packages.log 2>&1
 
       - name: Instalar dependencias de frontend
-        run: npm ci > frontend/npm_ci.log 2>&1
+        run: npm ci > npm_ci.log 2>&1
+        working-directory: frontend
 
       - name: Type-check y build del frontend (Vite)
-        run: npm run build > frontend/npm_build.log 2>&1
+        run: npm run build > npm_build.log 2>&1
         working-directory: frontend
 
       - name: Build del backend Rust (release)
