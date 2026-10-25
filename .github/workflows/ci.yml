@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  issues: write
+  checks: write
 
 jobs:
   build-and-test:
@@ -78,17 +78,7 @@ jobs:
           kill $PID 2>/dev/null || true
           wait $PID 2>/dev/null || true
 
-      - name: Diagnostico A GITHUB_TOKEN presente
-        if: failure()
-        continue-on-error: true
-        run: test -n "${GITHUB_TOKEN}"
-
-      - name: Diagnostico B api.github.com alcanzable
-        if: failure()
-        continue-on-error: true
-        run: python3 -c "import urllib.request; print(urllib.request.urlopen('https://api.github.com/', timeout=15).status)"
-
-      - name: Diagnostico C crear issue con cargo_build.log y verificar
+      - name: Diagnostico publicar cargo_build.log en un check run
         if: failure()
         continue-on-error: true
         run: |
@@ -98,13 +88,23 @@ jobs:
           try:
               body_log = open("src-tauri/cargo_build.log").read()
           except Exception as e:
-              body_log = f"No se pudo leer src-tauri/cargo_build.log: {e}"
+              body_log = f"No se pudo leer src-tauri/cargo_build.log: {e}\n"
           if len(body_log) > 60000:
-              body_log = body_log[-60000:]
-          body = f"Error de cargo build --release en ${{ matrix.os }}:\n\n```\n{body_log}\n```\n"
-          payload = json.dumps({"title": "fallo build: ${{ matrix.os }}", "body": body}).encode()
+              body_log = body_log[:60000] + "\n... [truncado] ...\n"
+          payload = json.dumps({
+              "name": "cargo build --release",
+              "head_branch": "${{ github.ref_name }}",
+              "head_sha": "${{ github.sha }}",
+              "status": "completed",
+              "conclusion": "failure",
+              "output": {
+                  "title": "Error de compilacion de cargo build --release en ${{ matrix.os }}",
+                  "summary": "Vea output.text para el detalle del error del compilador Rust.",
+                  "text": body_log,
+              },
+          }).encode()
           req = urllib.request.Request(
-              "https://api.github.com/repos/BlackBoneDel/RF-Launcher/issues",
+              f"https://api.github.com/repos/BlackBoneDel/RF-Launcher/check-runs",
               data=payload,
               headers={"Authorization": "token " + token,
                        "Accept": "application/vnd.github+json",
@@ -114,23 +114,11 @@ jobs:
           )
           try:
               with urllib.request.urlopen(req, timeout=15) as resp:
-                  data = json.loads(resp.read())
-                  number = data["number"]
+                  print("Check run creado HTTP", resp.status)
           except urllib.error.HTTPError as e:
-              print("GitHub API HTTP", e.code, e.read().decode()[:300])
+              print("GitHub API HTTP", e.code, e.read().decode()[:500])
               sys.exit(1)
           except Exception as e:
-              print("Excepción al crear:", repr(e))
-              sys.exit(1)
-          # Verificar que el issue quedó creado (persistió)
-          get_req = urllib.request.Request(
-              f"https://api.github.com/repos/BlackBoneDel/RF-Launcher/issues/{number}",
-              headers={"Authorization": "token " + token, "Accept": "application/vnd.github+json", "User-Agent": "rf-launcher-ci"},
-          )
-          try:
-              with urllib.request.urlopen(get_req, timeout=15) as resp2:
-                  print("Issue verificado #", number, "HTTP", resp2.status)
-          except Exception as e:
-              print("El issue no se pudo volver a leer:", repr(e))
+              print("Excepcion:", repr(e))
               sys.exit(1)
           EOF
