@@ -96,6 +96,38 @@ jobs:
           cat launcher_ram.log
         working-directory: src-tauri
 
+      # Los logs/artefactos de GitHub redirigen a un blob host que no siempre es
+      # alcanzable. Las anotaciones SÍ se leen por API, así que publicamos aquí
+      # los números que el informe necesita como evidencia verificable.
+      - name: Publicar evidencia medible de esta corrida
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import os, re, platform
+          def enc(s):
+              return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          def notice(title, body):
+              print(f"::notice title={title}::" + enc(body[:6000]))
+          who = platform.platform()
+          notice("evidence-env", f"OS={who}\ncommit={os.environ.get('GITHUB_SHA','')}")
+          for p in ["src-tauri/cargo_test.log", "src-tauri/cargo_smoke.log"]:
+              if not os.path.exists(p):
+                  continue
+              txt = re.sub(r"\x1b\[[0-9;]*m", "", open(p, errors="replace").read())
+              lines = txt.splitlines()
+              results = [l for l in lines if l.startswith("test result:")]
+              failed = [l for l in lines if "FAILED" in l]
+              java = [l for l in lines if "Adoptium" in l or "Mojang" in l or "majorVersion" in l]
+              notice("evidence-tests", f"[{p}]\n" + "\n".join((results + failed[:8] + java[:8]) or ["sin datos"]))
+          p = "src-tauri/launcher_ram.log"
+          if os.path.exists(p):
+              txt = open(p, errors="replace").read()
+              keys = [l for l in txt.splitlines() if re.match(r"^(Name|VmRSS|VmSize|VmPeak|VmHWM):", l)]
+              notice("evidence-ram", f"Launcher en reposo, sin instancias corriendo:\n"
+                     + ("\n".join(keys) if keys else "NO SE MIDIO EL PROCESO")
+                     + "\n--- cola del log ---\n" + txt[-1200:])
+          EOF
+
       - name: Publicar salida de cargo como anotaciones legibles vía API
         if: failure()
         continue-on-error: true
