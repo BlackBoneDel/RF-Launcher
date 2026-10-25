@@ -79,24 +79,44 @@ jobs:
           kill $PID 2>/dev/null || true
           wait $PID 2>/dev/null || true
 
-      - name: Diagnosticar fallo crear issue con los logs
+      - name: Diagnosticar fallo publicar log en issue de GitHub
         if: failure()
         run: |
           {
-            echo "## cargo_build.log"; cat src-tauri/cargo_build.log 2>/dev/null || true
-            echo "## cargo_test.log"; cat src-tauri/cargo_test.log 2>/dev/null || true
-            echo "## apt.log"; cat apt.log 2>/dev/null || true
-            echo "## apt_packages.log"; cat apt_packages.log 2>/dev/null || true
-            echo "## npm_ci.log"; cat frontend/npm_ci.log 2>/dev/null || true
-            echo "## npm_build.log"; cat frontend/npm_build.log 2>/dev/null || true
-            echo "## cargo_smoke.log"; cat src-tauri/cargo_smoke.log 2>/dev/null || true
-            echo "## launcher_ram.log"; cat src-tauri/launcher_ram.log 2>/dev/null || true
+            echo "## cargo_build.log ($(date -u))"
+            cat src-tauri/cargo_build.log 2>/dev/null || true
+            echo "## cargo_test.log"
+            cat src-tauri/cargo_test.log 2>/dev/null || true
+            echo "## apt.log"
+            cat apt.log 2>/dev/null || true
+            echo "## apt_packages.log"
+            cat apt_packages.log 2>/dev/null || true
+            echo "## npm_ci.log"
+            cat frontend/npm_ci.log 2>/dev/null || true
+            echo "## npm_build.log"
+            cat frontend/npm_build.log 2>/dev/null || true
           } > /tmp/ci_diag.log
-          if [ "$(wc -c < /tmp/ci_diag.log)" -gt 50000 ]; then
-            tail -c 50000 /tmp/ci_diag.log > /tmp/ci_diag_trunc.log
-            mv /tmp/ci_diag_trunc.log /tmp/ci_diag.log
+          if [ "$(wc -c < /tmp/ci_diag.log)" -gt 60000 ]; then
+            tail -c 60000 /tmp/ci_diag.log > /tmp/ci_diag.trunc && mv /tmp/ci_diag.trunc /tmp/ci_diag.log
           fi
-          gh api --method POST repos/BlackBoneDel/RF-Launcher/issues \
-            -f title="CI falló en ${{ matrix.os }}" \
-            -F body=@/tmp/ci_diag.log \
-            || echo "No se pudo crear el issue de diagnóstico"
+          python3 - <<'EOF'
+          import json, os, urllib.request, urllib.error
+          body = open("/tmp/ci_diag.log").read()
+          payload = json.dumps({"title": "CI falló en ${{ matrix.os }}", "body": body}).encode()
+          req = urllib.request.Request(
+              "https://api.github.com/repos/BlackBoneDel/RF-Launcher/issues",
+              data=payload,
+              headers={
+                  "Authorization": "token " + os.environ["GITHUB_TOKEN"],
+                  "Accept": "application/vnd.github+json",
+                  "User-Agent": "rf-launcher-ci",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  print("Issue creado:", resp.status)
+          except urllib.error.HTTPError as e:
+              print("GitHub API rechazó la creación del issue:", e.code, e.read().decode()[:500])
+          EOF
