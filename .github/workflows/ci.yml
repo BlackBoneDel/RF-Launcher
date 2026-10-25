@@ -114,9 +114,12 @@ jobs:
               lines = clean.splitlines()
               for i, line in enumerate(lines):
                   # Sólo ERRORES: los warnings ahogaban el diagnóstico.
-                  if re.match(r"^error(\[|:)", line) or "could not compile" in line:
+                  if (re.match(r"^error(\[|:)", line)
+                      or "could not compile" in line
+                      or re.search(r"(^failures:|^---- .* stdout ----|FAILED$|panicked at|^test result:)", line)
+                      or re.match(r"^test .* FAILED", line)):
                       blocks.append(f"### {p}:{i+1}\n" + "\n".join(lines[i:i+18]))
-              tail = clean[-1500:]
+              tail = clean[-2500:]
           if blocks:
               text = "\n\n".join(blocks)
           else:

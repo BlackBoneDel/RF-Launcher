@@ -75,9 +75,16 @@ mod tests {
     }
 
     #[test]
-    fn ram_equal_to_physical_is_rejected() {
+    fn ram_equal_to_physical_warns_but_is_not_rejected() {
+        // La especificación prohíbe asignar MÁS RAM de la física; asignar
+        // exactamente el 100 % se permite pero se marca como imprudente (>80 %).
         assert!(matches!(
             validate_ram_max(32000, 32000),
+            RamValidation::Warn { .. }
+        ));
+        // Un MB por encima sí es rechazo duro.
+        assert!(matches!(
+            validate_ram_max(32001, 32000),
             RamValidation::Exceeds { .. }
         ));
     }
