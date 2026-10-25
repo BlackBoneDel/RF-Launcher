@@ -113,6 +113,12 @@ jobs:
           curl -sS --max-time 45 -o adoptium_probe.json \
             -w "ADOPTIUM_PROBE_HTTP=%{http_code} TIME=%{time_total} SIZE=%{size_download}\n" \
             "$URL" 2>&1 | tee -a adoptium_probe.log
+          FALLBACK="https://api.adoptium.net/v3/binary/latest/21/ga/$OS/$ARCH/jdk/hotspot/normal/eclipse"
+          echo "ADOPTIUM_PROBE_FALLBACK_URL=$FALLBACK" | tee -a adoptium_probe.log
+          # Sin -L: solo comprobamos la redirección, sin descargar 200 MB.
+          curl -sS -o /dev/null --max-time 40 \
+            -w "ADOPTIUM_PROBE_FALLBACK_HTTP=%{http_code} TIME=%{time_total} REDIRECT=%{redirect_url}\n" \
+            "$FALLBACK" 2>&1 | tee -a adoptium_probe.log
           python3 - <<'EOF' | tee -a adoptium_probe.log
           import json, os
           try:

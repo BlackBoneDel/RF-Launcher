@@ -265,7 +265,8 @@ mod tests {
                 block[i] = 0x5A;
                 i += 4096;
             }
-            block[block.len() - 1] = 0xA5;
+            let last = block.len() - 1;
+            block[last] = 0xA5;
             blocks.push(block);
         }
         assert_eq!(blocks.len(), 96);
