@@ -1,4 +1,14 @@
-name: CI
+# ÚNICO workflow de verificación de esta rama: matriz real Windows/macOS/Linux.
+#
+# El workflow "Minimal test" (.github/workflows/minimal.yml, añadido en b097e0d
+# y borrado en 4c40f16) generó un FALSO VERDE: run 40216745092, `success` con
+# un solo job `hello` y ninguna matriz. Para que un ✅ en la pestaña Actions
+# nunca vuelva a confundirse con la matriz real:
+#   1) este fichero es el único workflow permitido (guardia más abajo), y
+#   2) el nombre del workflow dice explícitamente qué verifica.
+# Si en el futuro se añade un workflow legítimo, hay que actualizar la guardia
+# Y documentarlo: un workflow extra sin matriz es un falso verde en potencia.
+name: CI Matriz RF Launcher 3 SO (verificación real)
 
 on:
   push:
@@ -10,21 +20,35 @@ permissions:
 defaults:
   run:
     # Git Bash está disponible en los tres runners (incluido windows-latest).
-    # Sin esto, `tee`, `set -o pipefail` y `2>&1 | tee` fallan en PowerShell.
     shell: bash
 
 jobs:
   build-and-test:
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         # ubuntu-22.04 en lugar de ubuntu-latest: Tauri 1.x enlaza contra
-        # webkit2gtk-4.0, cuyo paquete de desarrollo sólo existe en Ubuntu
-        # 22.04 (en 24.04 fue sustituido por 4.1). Se documenta en el informe.
+        # webkit2gtk-4.0, sustituido por 4.1 en Ubuntu 24.04. La deprecación
+        # de ubuntu-22.04 empezó 2026-09-17 y su retirada es 2027-04-17
+        # (actions/runner-images#14254): ver Memo de Decisión Tauri 1 vs 2.
         os: [windows-latest, macos-latest, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Guardia contra workflows de diagnóstico sin matriz
+        shell: bash
+        run: |
+          set -e
+          files=$(ls -1 .github/workflows | grep -E '\.ya?ml$' | sort)
+          echo "Workflows presentes:"; echo "$files"
+          other=$(echo "$files" | grep -v '^ci.yml$' || true)
+          if [ -n "$other" ]; then
+            echo "::error title=diagnostic-workflow::Workflow ajeno a la matriz real detectado: $other. Un workflow de diagnóstico produce falsos verdes."
+            exit 1
+          fi
+          echo "OK: ci.yml es el unico workflow; el resultado SI representa la matriz."
 
       - name: Instalar Rust toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -65,35 +89,162 @@ jobs:
 
       - name: Tests unitarios de Rust (config, instancia, RAM, mapeo Java)
         run: |
+          set -o pipefail
           cargo test -- --nocapture \
             --skip ensure_java_21_downloads_from_adoptium \
             --skip mojang_manifest_major_version_matches_static_table \
             2>&1 | tee cargo_test.log
         working-directory: src-tauri
 
-      - name: Smoke test de red (Adoptium + manifiesto de Mojang, Linux)
-        if: "runner.os == 'Linux'"
+      # PARTE E: descarga REAL de un JDK desde Adoptium en los 3 SO.
+      # Si Adoptium bloquea un runner, este paso FALLA con el error real;
+      # no se usa continue-on-error ni se marca como "hecho" en el informe.
+      - name: Smoke test de descarga real de JDK 21 desde Adoptium (3 SO)
         run: |
+          set -o pipefail
           cargo test ensure_java_21_downloads_from_adoptium -- --nocapture 2>&1 | tee cargo_smoke.log
-          cargo test mojang_manifest_major_version_matches_static_table -- --nocapture 2>&1 | tee -a cargo_smoke.log
         working-directory: src-tauri
 
-      - name: Línea base de RAM del launcher en reposo (Linux)
+      # El manifiesto de Mojang es JSON independiente de la plataforma; se
+      # verifica una vez (Linux) contra la tabla estática que usan los 3 SO.
+      - name: Smoke test del manifiesto de Mojang (Linux)
+        if: "runner.os == 'Linux'"
+        run: |
+          set -o pipefail
+          cargo test mojang_manifest_major_version_matches_static_table -- --nocapture 2>&1 | tee cargo_smoke_mojang.log
+        working-directory: src-tauri
+
+      # ---------------- Línea base de RAM en reposo, los 3 SO ----------------
+      # Cada SO escribe el MISMO fichero clave=valor: src-tauri/ram_baseline.txt
+      - name: Línea base de RAM en reposo (Linux)
         if: "runner.os == 'Linux'"
         run: |
           set +e
-          xvfb-run -a ./target/release/rf-launcher > launcher_ram.log 2>&1 &
+          : > ram_baseline.txt
+          : > launcher_ram.log
+          echo "RAM_IDLE_OS=Linux" >> ram_baseline.txt
+          echo "RAM_IDLE_METRIC=VmRSS de /proc/PID/status (KB)" >> ram_baseline.txt
+          xvfb-run -a ./target/release/rf-launcher >> launcher_ram.log 2>&1 &
           sleep 12
           LPID=$(pgrep -x rf-launcher | head -1)
-          echo "=== Launcher en reposo, sin instancias corriendo ===" | tee -a launcher_ram.log
           if [ -n "$LPID" ]; then
-            grep -E '^(Name|VmRSS|VmSize|VmPeak|VmHWM):' "/proc/$LPID/status" | tee -a launcher_ram.log
-            ps -o pid=,rss=,vsz=,cmd= -p "$LPID" | tee -a launcher_ram.log
+            MAIN=$(awk '/^VmRSS:/{print $2}' "/proc/$LPID/status")
+            TREE=${MAIN:-0}
+            for c in $(pgrep -P "$LPID" 2>/dev/null); do
+              v=$(awk '/^VmRSS:/{print $2}' "/proc/$c/status" 2>/dev/null)
+              TREE=$((TREE + ${v:-0}))
+            done
+            grep -E '^(Name|VmRSS|VmSize|VmPeak|VmHWM):' "/proc/$LPID/status" >> launcher_ram.log
+            ps -o pid=,rss=,vsz=,cmd= -p "$LPID" >> launcher_ram.log
+            echo "RAM_IDLE_STATUS=OK" >> ram_baseline.txt
+            echo "RAM_IDLE_MAIN_KB=${MAIN:-0}" >> ram_baseline.txt
+            echo "RAM_IDLE_TREE_KB=$TREE" >> ram_baseline.txt
+            echo "RAM_IDLE_LAUNCH=xvfb-run con proceso principal PID $LPID" >> ram_baseline.txt
             kill "$LPID"
           else
-            echo "No se encontró el proceso rf-launcher; revisar launcher_ram.log" | tee -a launcher_ram.log
+            echo "RAM_IDLE_STATUS=BLOCKED" >> ram_baseline.txt
+            tail -c 700 launcher_ram.log | tr '\n' ' ' >> /dev/null
+            echo "::warning title=ram-baseline-linux::No se encontro el proceso rf-launcher; revisar launcher_ram.log"
           fi
-          cat launcher_ram.log
+          echo "--- ram_baseline.txt ---"; cat ram_baseline.txt
+        working-directory: src-tauri
+
+      - name: Línea base de RAM en reposo (macOS)
+        if: "runner.os == 'macOS'"
+        run: |
+          set +e
+          : > ram_baseline.txt
+          : > launcher_ram.log
+          echo "RAM_IDLE_OS=macOS" >> ram_baseline.txt
+          echo "RAM_IDLE_METRIC=ps rss (KB), proceso principal más hijos" >> ram_baseline.txt
+          APP="$PWD/.rf-launcher-audit/RF Launcher.app"
+          mkdir -p "$APP/Contents/MacOS"
+          cp ./target/release/rf-launcher "$APP/Contents/MacOS/rf-launcher"
+          cat > "$APP/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleIdentifier</key><string>dev.rf.launcher.audit</string>
+            <key>CFBundleExecutable</key><string>rf-launcher</string>
+            <key>CFBundleName</key><string>RF Launcher</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSMinimumSystemVersion</key><string>10.15</string>
+          </dict></plist>
+          PLIST
+          LAUNCH="app-bundle"
+          open "$APP" >> launcher_ram.log 2>&1
+          sleep 12
+          LPID=$(pgrep -x rf-launcher | head -1)
+          if [ -z "$LPID" ]; then
+            LAUNCH="binario-directo-tras-fallo-de-app-bundle"
+            ./target/release/rf-launcher >> launcher_ram.log 2>&1 &
+            sleep 8
+            LPID=$(pgrep -x rf-launcher | head -1)
+          fi
+          if [ -n "$LPID" ]; then
+            MAIN=$(ps -o rss= -p "$LPID" | tr -d ' ')
+            TREE=${MAIN:-0}
+            for c in $(pgrep -P "$LPID" 2>/dev/null); do
+              v=$(ps -o rss= -p "$c" 2>/dev/null | tr -d ' ')
+              TREE=$((TREE + ${v:-0}))
+            done
+            ps -o pid=,rss=,vsz=,command= -p "$LPID" >> launcher_ram.log
+            echo "RAM_IDLE_STATUS=OK" >> ram_baseline.txt
+            echo "RAM_IDLE_MAIN_KB=${MAIN:-0}" >> ram_baseline.txt
+            echo "RAM_IDLE_TREE_KB=$TREE" >> ram_baseline.txt
+            echo "RAM_IDLE_LAUNCH=$LAUNCH PID $LPID" >> ram_baseline.txt
+            kill "$LPID" 2>/dev/null
+          else
+            echo "RAM_IDLE_STATUS=BLOCKED" >> ram_baseline.txt
+            echo "RAM_IDLE_NOTE=$(tail -c 900 launcher_ram.log | tr '\n' ' ')" >> ram_baseline.txt
+            echo "::warning title=ram-baseline-macos::No se pudo lanzar la app; ver RAM_IDLE_NOTE y launcher_ram.log"
+          fi
+          echo "--- ram_baseline.txt ---"; cat ram_baseline.txt
+          echo "--- launcher_ram.log (cola) ---"; tail -c 1200 launcher_ram.log
+        working-directory: src-tauri
+
+      - name: Línea base de RAM en reposo (Windows)
+        if: "runner.os == 'Windows'"
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Set-Content -Path ram_baseline.txt -Value @('RAM_IDLE_OS=Windows','RAM_IDLE_METRIC=WorkingSet64 de Get-Process (KB)')
+          Set-Content -Path launcher_ram.log -Value ''
+          $exe = (Resolve-Path './target/release/rf-launcher.exe').Path
+          $proc = $null
+          try {
+            $proc = Start-Process -FilePath $exe -PassThru
+            Start-Sleep -Seconds 12
+            $proc.Refresh()
+            if ($proc.HasExited) {
+              throw "El launcher salio inmediatamente (exit code $($proc.ExitCode))."
+            }
+            $main = [math]::Round($proc.WorkingSet64 / 1KB)
+            $tree = $main
+            $children = @(Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $proc.Id })
+            foreach ($c in $children) {
+              $cp = Get-Process -Id $c.ProcessId -ErrorAction SilentlyContinue
+              if ($cp) { $tree += [math]::Round($cp.WorkingSet64 / 1KB) }
+            }
+            Add-Content -Path launcher_ram.log -Value "PID=$($proc.Id) WorkingSet64=$($proc.WorkingSet64) VirtualMemorySize64=$($proc.VirtualMemorySize64) Children=$($children.Count)"
+            Add-Content -Path ram_baseline.txt -Value @(
+              'RAM_IDLE_STATUS=OK',
+              "RAM_IDLE_MAIN_KB=$main",
+              "RAM_IDLE_TREE_KB=$tree",
+              "RAM_IDLE_LAUNCH=Start-Process PID $($proc.Id) con $($children.Count) procesos hijo (WebView2)"
+            )
+          } catch {
+            Add-Content -Path launcher_ram.log -Value "ERROR: $($_.Exception.Message)"
+            Add-Content -Path ram_baseline.txt -Value @(
+              'RAM_IDLE_STATUS=BLOCKED',
+              "RAM_IDLE_NOTE=$($_.Exception.Message)"
+            )
+            Write-Host "::warning title=ram-baseline-windows::No se pudo medir: $($_.Exception.Message)"
+          } finally {
+            if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+          }
+          Write-Host '--- ram_baseline.txt ---'
+          Get-Content ram_baseline.txt
         working-directory: src-tauri
 
       # Los logs/artefactos de GitHub redirigen a un blob host que no siempre es
@@ -108,28 +259,34 @@ jobs:
               return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
           def notice(title, body):
               print(f"::notice title={title}::" + enc(body[:6000]))
-          who = platform.platform()
-          notice("evidence-env", f"OS={who}\ncommit={os.environ.get('GITHUB_SHA','')}")
-          for p in ["src-tauri/cargo_test.log", "src-tauri/cargo_smoke.log"]:
+          notice("evidence-env", f"OS={platform.platform()}\ncommit={os.environ.get('GITHUB_SHA','')}")
+          for p in ["src-tauri/cargo_test.log", "src-tauri/cargo_smoke.log", "src-tauri/cargo_smoke_mojang.log"]:
               if not os.path.exists(p):
+                  notice("evidence-tests", f"[{p}] NO EXISTE (paso no ejecutado en este SO)")
                   continue
               txt = re.sub(r"\x1b\[[0-9;]*m", "", open(p, errors="replace").read())
               lines = txt.splitlines()
               results = [l for l in lines if l.startswith("test result:")]
               failed = [l for l in lines if "FAILED" in l]
-              java = [l for l in lines if "Adoptium" in l or "Mojang" in l or "majorVersion" in l]
+              markers = [l for l in lines if re.search(
+                  r"(ADOPTIUM_SMOKE|MOJANG_SMOKE|KILL_TEST_CHILD_RSS_KB|RAM_FISICA_MB|"
+                  r"kill_really_terminates|truncated_download|interrupted_install)", l)]
+              notice("evidence-tests", f"[{p}]\n" + "\n".join((results + failed[:8] + markers[:14]) or ["sin datos"]))
               phys = [l for l in lines if "RAM_FISICA_MB=" in l]
-              kill = [l for l in lines if "kill_really_terminates" in l or "PID" in l]
-              notice("evidence-tests", f"[{p}]\n" + "\n".join((results + failed[:8] + java[:8] + kill[:8]) or ["sin datos"]))
               if phys:
                   notice("evidence-ram-physical", "\n".join(phys))
+          p = "src-tauri/ram_baseline.txt"
+          if os.path.exists(p):
+              body = open(p, errors="replace").read()
+              notice("evidence-ram-idle", body)
+              if "RAM_IDLE_STATUS=BLOCKED" in body:
+                  print("::warning title=ram-baseline-blocked::RAM en reposo NO medida en este SO; ver evidence-ram-idle")
+          else:
+              notice("evidence-ram-idle", "RAM_IDLE_STATUS=BLOCKED (sin fichero ram_baseline.txt)")
+              print("::warning title=ram-baseline-blocked::No existe ram_baseline.txt en este SO")
           p = "src-tauri/launcher_ram.log"
           if os.path.exists(p):
-              txt = open(p, errors="replace").read()
-              keys = [l for l in txt.splitlines() if re.match(r"^(Name|VmRSS|VmSize|VmPeak|VmHWM):", l)]
-              notice("evidence-ram", f"Launcher en reposo, sin instancias corriendo:\n"
-                     + ("\n".join(keys) if keys else "NO SE MIDIO EL PROCESO")
-                     + "\n--- cola del log ---\n" + txt[-1200:])
+              notice("evidence-ram-log", open(p, errors="replace").read()[-1800:])
           EOF
 
       - name: Publicar salida de cargo como anotaciones legibles vía API
@@ -137,29 +294,25 @@ jobs:
         continue-on-error: true
         run: |
           python3 - <<'EOF'
-          import os
-          paths = ["src-tauri/cargo_build.log", "src-tauri/cargo_test.log", "src-tauri/cargo_smoke.log"]
-          import re
+          import os, re
+          paths = ["src-tauri/cargo_build.log", "src-tauri/cargo_test.log",
+                   "src-tauri/cargo_smoke.log", "src-tauri/cargo_smoke_mojang.log"]
           blocks = []
           tail = ""
           for p in paths:
               if not os.path.exists(p):
                   continue
-              raw = open(p, errors="replace").read()
-              clean = re.sub(r"\x1b\[[0-9;]*m", "", raw)
+              clean = re.sub(r"\x1b\[[0-9;]*m", "", open(p, errors="replace").read())
               lines = clean.splitlines()
               for i, line in enumerate(lines):
-                  # Sólo ERRORES: los warnings ahogaban el diagnóstico.
                   if (re.match(r"^error(\[|:)", line)
                       or "could not compile" in line
+                      or "FALLO REAL DE DESCARGA" in line
                       or re.search(r"(^failures:|^---- .* stdout ----|FAILED$|panicked at|^test result:)", line)
                       or re.match(r"^test .* FAILED", line)):
                       blocks.append(f"### {p}:{i+1}\n" + "\n".join(lines[i:i+18]))
               tail = clean[-2500:]
-          if blocks:
-              text = "\n\n".join(blocks)
-          else:
-              text = "(sin líneas 'error' detectadas; cola de los logs)\n" + tail
+          text = "\n\n".join(blocks) if blocks else "(sin lineas 'error' detectadas; cola de los logs)\n" + tail
           text = text[:47000]
           def enc(s):
               return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
@@ -178,6 +331,8 @@ jobs:
             src-tauri/cargo_build.log
             src-tauri/cargo_test.log
             src-tauri/cargo_smoke.log
+            src-tauri/cargo_smoke_mojang.log
             src-tauri/launcher_ram.log
+            src-tauri/ram_baseline.txt
           if-no-files-found: ignore
           retention-days: 14

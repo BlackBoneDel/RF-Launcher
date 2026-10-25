@@ -248,28 +248,91 @@ mod tests {
         assert!(result.error.is_none());
     }
 
-    /// Evidencia real del criterio de éxito #6: se lanza un proceso de
-    /// larga duración, se le "mata" y se comprueba que su PID DESAPARECE
+    /// Ramificación HIJO del test de kill (Parte H de la auditoría): en vez
+    /// de un `sleep`/`ping` trivial, el proceso víctima es el propio binario
+    /// de tests con 96 MiB de memoria REALMENTE tocada y 4 hilos activos.
+    /// Escribe un fichero de "listo" DESPUÉS de reservar todo, de modo que el
+    /// padre nunca mate a un proceso vacío.
+    fn run_realistic_child() {
+        let mut blocks: Vec<Vec<u8>> = Vec::new();
+        for _ in 0..96 {
+            let mut block = vec![0u8; 1024 * 1024];
+            block[0] = 0x5A;
+            block[1024 * 1024 - 1] = 0xA5;
+            blocks.push(block);
+        }
+        assert_eq!(blocks.len(), 96);
+
+        let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                let flag = alive.clone();
+                thread::spawn(move || {
+                    while flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                })
+            })
+            .collect();
+
+        if let Some(path) = std::env::var_os("RF_LAUNCHER_CHILD_READY") {
+            let _ = std::fs::write(
+                path,
+                format!("96MB_4THREADS threads={}\n", workers.len()),
+            );
+        }
+
+        // El padre debe matarnos mucho antes; 120 s es sólo un límite de
+        // seguridad para no dejar un proceso colgado si el test falla.
+        thread::sleep(Duration::from_secs(120));
+        alive.store(false, std::sync::atomic::Ordering::Relaxed);
+        for worker in workers {
+            let _ = worker.join();
+        }
+    }
+
+    /// Evidencia real del criterio de éxito #6: se lanza un proceso con
+    /// memoria e hilos, se le "mata" y se comprueba que su PID DESAPARECE
     /// de la tabla de procesos. Se ejecuta en los 3 SO vía la matriz de CI.
     #[test]
     fn kill_really_terminates_process_and_pid_disappears() {
-        let mut child = if cfg!(windows) {
-            Command::new("ping")
-                .args(["-n", "60", "127.0.0.1"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("no se pudo lanzar ping")
-        } else {
-            Command::new("sleep")
-                .arg("60")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("no se pudo lanzar sleep")
-        };
+        if std::env::var_os("RF_LAUNCHER_CHILD_MODE").is_some() {
+            run_realistic_child();
+            return;
+        }
+
+        let ready = temp_dir().join(format!("rf-kill-ready-{}", std::process::id()));
+        let _ = std::fs::remove_file(&ready);
+
+        let exe = std::env::current_exe().expect("no se pudo resolver el binario de tests");
+        let mut child = Command::new(exe)
+            .arg("kill_really_terminates_process_and_pid_disappears")
+            .arg("--nocapture")
+            .env("RF_LAUNCHER_CHILD_MODE", "1")
+            .env("RF_LAUNCHER_CHILD_READY", &ready)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("no se pudo relanzar el binario de tests como proceso víctima");
 
         let pid = child.id(); // u32 directo, no Option
+        let start = Instant::now();
+        while !ready.exists() && start.elapsed() < Duration::from_secs(20) {
+            thread::sleep(Duration::from_millis(100));
+        }
+        assert!(
+            ready.exists(),
+            "el hijo no llegó a reservar 96 MiB y 4 hilos en 20 s"
+        );
+
+        // Evidencia medible de que el proceso NO es trivial.
+        let sys = sysinfo::System::new_all();
+        let rss_kb = sys
+            .process(sysinfo::Pid::from_u32(pid))
+            .map(|p| p.memory() / 1024)
+            .unwrap_or(0);
+        println!("KILL_TEST_CHILD_RSS_KB={rss_kb}");
+
         assert!(
             process_exists(pid),
             "el proceso recién lanzado debe existir en la tabla de procesos"
@@ -283,6 +346,7 @@ mod tests {
             !process_exists(pid),
             "el PID {pid} debe haber DESAPARECIDO de la lista de procesos"
         );
+        let _ = std::fs::remove_file(&ready);
     }
 
     #[test]

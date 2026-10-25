@@ -84,10 +84,15 @@ pub async fn resolve_config(
 }
 
 #[tauri::command]
+/// `force` es obligatorio en el cable: sin él, el aviso >80% de RAM era un
+/// callejón sin salida (se devolvía `ok:false` pero no había forma de
+/// confirmar). Tauri 1 convierte este parámetro a `force` en JS (es una sola
+/// palabra, no cambia).
 pub async fn set_global_config(
     state: State<'_, AppState>,
     key: String,
     value: ConfigValue,
+    force: bool,
 ) -> Result<RamCheck> {
     let inner = state.inner.lock().map_err(|e| LauncherError::Custom(e.to_string()))?;
     let config_key = ConfigKey::from_str(&key)
@@ -109,14 +114,20 @@ pub async fn set_global_config(
                 .into())
             }
             RamValidation::Warn { requested_mb, total_mb } => {
-                return Ok(RamCheck {
-                    total_mb,
-                    ok: false,
-                    warning: Some(format!(
-                        "Se solicitan {requested_mb} MB ({}% de la RAM física de {total_mb} MB). ¿Confirmar?",
-                        (requested_mb as f64) * 100.0 / (total_mb as f64)
-                    )),
-                });
+                // Sin confirmación explícita se devuelve el aviso y NO se
+                // guarda. Con `force=true` se guarda igual que en la ruta por
+                // instancia (`set_instance_config`), para que el aviso sea
+                // realmente confirmable y no un mensaje muerto.
+                if !force {
+                    return Ok(RamCheck {
+                        total_mb,
+                        ok: false,
+                        warning: Some(format!(
+                            "Se solicitan {requested_mb} MB ({}% de la RAM física de {total_mb} MB). ¿Confirmar?",
+                            (requested_mb as f64) * 100.0 / (total_mb as f64)
+                        )),
+                    });
+                }
             }
             RamValidation::Ok => {}
         }

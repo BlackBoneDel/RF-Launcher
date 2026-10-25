@@ -4,8 +4,8 @@ import { ArrowLeft } from 'lucide-react';
 type Props = {
   onSubmit: (values: {
     name: string;
-    minecraft_version: string;
-    fabric_loader: string | null;
+    minecraftVersion: string;
+    fabricLoader: string | null;
   }) => void;
   onBack: () => void;
 };
@@ -33,8 +33,8 @@ export function CreateInstanceForm({ onSubmit, onBack }: Props) {
     try {
       await onSubmit({
         name: name.trim(),
-        minecraft_version: minecraftVersion.trim(),
-        fabric_loader: useFabric ? fabricVersion.trim() || null : null,
+        minecraftVersion: minecraftVersion.trim(),
+        fabricLoader: useFabric ? fabricVersion.trim() || null : null,
       });
     } catch (err) {
       setError(String(err));

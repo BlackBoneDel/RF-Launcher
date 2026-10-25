@@ -21,6 +21,13 @@ pub enum RamValidation {
 /// Umbral por encima del cual se considera la asignación imprudente.
 const RAM_WARN_THRESHOLD: f64 = 0.80;
 
+/// DECISIÓN PENDIENTE (auditoría Fase 3-A, Parte C): el límite exacto del
+/// 100% de la RAM física NO está fijado por una cita textual verificable de
+/// la spec. La implementación actual interpreta "no permitir MÁS RAM de la
+/// disponible" como `>` estricto: exactamente el 100% se PERMITE con aviso
+/// (>80%). La interpretación alternativa es `>=` (rechazar también el 100%).
+/// NO se cambia nada aquí hasta que el usuario decida; ver el informe de
+/// auditoría. Los tests cubren ambos lados del límite (99.x% / 100% / 100%+).
 pub fn validate_ram_max(requested_mb: u64, total_mb: u64) -> RamValidation {
     if requested_mb > total_mb {
         RamValidation::Exceeds {

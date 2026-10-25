@@ -491,21 +491,36 @@ mod tests {
     use super::*;
     use std::env::temp_dir;
 
-    #[cfg(target_os = "linux")]
+    /// Descarga REAL de un JDK desde Adoptium, verificación SHA-256,
+    /// extracción y ejecución de `java -version`. Se ejecuta en los 3 SO de
+    /// la matriz de CI (Parte E de la auditoría): NO lleva `cfg(linux)`.
     #[tokio::test]
     async fn ensure_java_21_downloads_from_adoptium() {
         let dir = temp_dir().join(format!("rf-java-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let mgr = JavaManager::new(dir.clone());
-        let bin = mgr
-            .ensure(21)
-            .await
-            .expect("Java 21 debe descargarse de Adoptium y extraerse");
+        println!(
+            "ADOPTIUM_SMOKE_OS={} ARCH={} JAVA=21",
+            adoptium_os(),
+            adoptium_arch()
+        );
+        let bin = mgr.ensure(21).await.unwrap_or_else(|e| {
+            panic!(
+                "FALLO REAL DE DESCARGA en os={} arch={}: {e}",
+                adoptium_os(),
+                adoptium_arch()
+            )
+        });
         assert!(bin.exists(), "el binario java debe existir tras la descarga");
+        println!("ADOPTIUM_SMOKE_JAVA_BIN={}", bin.display());
         let output = std::process::Command::new(&bin)
             .arg("-version")
             .output()
             .expect("java -version debe ejecutarse");
+        println!(
+            "ADOPTIUM_SMOKE_JAVA_VERSION={}",
+            String::from_utf8_lossy(&output.stderr).lines().next().unwrap_or("")
+        );
         assert!(
             output.status.success(),
             "java -version falló: {}",
@@ -514,6 +529,11 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Compara la tabla estática con `javaVersion.majorVersion` del JSON de
+    /// Mojang. Antes había un `if let Ok(...)` que OMITÍA silenciosamente los
+    /// fallos de red: ahora se imprime cada resultado y se exige que al menos
+    /// una comparación real haya ocurrido, para que un bloqueo de red no se
+    /// disfrace de test verde.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn mojang_manifest_major_version_matches_static_table() {
@@ -525,19 +545,34 @@ mod tests {
             ("1.20.5", 21),
             ("1.21", 21),
         ];
+        let mut compared = 0usize;
+        let mut network_errors = Vec::new();
         for (minecraft_version, expected) in cases {
             let static_version = java_version_for_minecraft(minecraft_version).unwrap();
             assert_eq!(
                 static_version, expected,
                 "mapeo estático para {minecraft_version}"
             );
-            if let Ok(major) = fetch_java_major_version(minecraft_version).await {
-                assert_eq!(
-                    major, expected,
-                    "manifiesto de Mojang para {minecraft_version}"
-                );
+            match fetch_java_major_version(minecraft_version).await {
+                Ok(major) => {
+                    compared += 1;
+                    println!("MOJANG_SMOKE_HIT {minecraft_version} majorVersion={major}");
+                    assert_eq!(
+                        major, expected,
+                        "manifiesto de Mojang para {minecraft_version}"
+                    );
+                }
+                Err(e) => {
+                    println!("MOJANG_SMOKE_ERR {minecraft_version}: {e}");
+                    network_errors.push(format!("{minecraft_version}: {e}"));
+                }
             }
         }
+        println!("MOJANG_SMOKE_COMPARED={}/{}", compared, cases.len());
+        assert!(
+            compared > 0,
+            "ninguna comparación real contra Mojang; errores: {network_errors:?}"
+        );
     }
 
     #[test]

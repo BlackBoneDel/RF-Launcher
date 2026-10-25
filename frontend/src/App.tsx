@@ -63,10 +63,12 @@ export default function App() {
 
   const handleCreate = async (values: {
     name: string;
-    minecraft_version: string;
-    fabric_loader: string | null;
+    minecraftVersion: string;
+    fabricLoader: string | null;
   }) => {
     try {
+      // Las claves son camelCase: Tauri 1 las mapea a los parámetros
+      // snake_case del comando Rust `create_instance`.
       await invoke('create_instance', values);
       setView('instances');
       await refresh();

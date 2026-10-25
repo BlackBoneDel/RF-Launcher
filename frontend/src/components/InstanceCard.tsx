@@ -133,7 +133,7 @@ export function InstanceCard({ instance, onStatusChange }: Props) {
         <p className="text-xs text-[var(--muted)] truncate">
           Minecraft {instance.minecraft_version}
           {instance.fabric_loader ? ` · Fabric Loader ${instance.fabric_loader}` : ' · vanilla'}
-          {instance.template_origin ? ` · plantilla: ${instance.template_origin}` : ''}
+          {instance.templateOrigin ? ` · plantilla: ${instance.templateOrigin}` : ''}
         </p>
         <div className="mt-1.5 flex items-center gap-2 text-xs text-[var(--muted)]">
           <span>RAM máx.:</span>

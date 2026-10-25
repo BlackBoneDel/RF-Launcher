@@ -14,13 +14,20 @@ use crate::error::{LauncherError, Result};
 /// El identificador (UUID) es inmutable y es la clave de referencia; el nombre
 /// visible puede cambiar sin romper nada. `template_origin` existe para fases
 /// futuras (plantillas preconfiguradas, ej. "rf-client-default"); en esta fase
-/// siempre se persiste como null y se serializa/deserializa correctamente.
+/// siempre se persiste como null. En el cable JSON el campo se llama
+/// `templateOrigin` (camelCase), no `template_origin`: ver el atributo serde
+/// y el test de regresión `template_origin_wire_field_is_exactly_...`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Instance {
     pub id: Uuid,
     pub name: String,
     pub minecraft_version: String,
     pub fabric_loader: Option<String>,
+    /// Nombre de la plantilla de origen. En el cable Rust -> TypeScript se
+    /// llama EXACTAMENTE `templateOrigin` (el plan original de Fase 3-A lo
+    /// especificaba en camelCase). `alias` permite leer sin migración los
+    /// `instance.json` escritos antes de esta corrección.
+    #[serde(rename = "templateOrigin", alias = "template_origin")]
     pub template_origin: Option<String>,
     /// Overrides de configuración específicos de esta instancia (ej. RAM).
     /// Las claves viven en config::ConfigKey, serializadas como strings.
@@ -37,6 +44,7 @@ pub struct InstanceSummary {
     pub name: String,
     pub minecraft_version: String,
     pub fabric_loader: Option<String>,
+    #[serde(rename = "templateOrigin", alias = "template_origin")]
     pub template_origin: Option<String>,
     pub ram_min_mb: Option<u64>,
     pub ram_max_mb: Option<u64>,
@@ -185,7 +193,7 @@ mod tests {
         let text = fs::read_to_string(inst.config_path(&dir)).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
 
-        assert_eq!(parsed["template_origin"], serde_json::Value::Null);
+        assert_eq!(parsed["templateOrigin"], serde_json::Value::Null);
         assert_eq!(parsed["id"], inst.id.to_string());
         assert_eq!(parsed["minecraft_version"], "1.20.1");
         assert_eq!(parsed["fabric_loader"], serde_json::Value::Null);
@@ -195,6 +203,45 @@ mod tests {
         assert_eq!(reloaded.template_origin, None);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Regresión de protocolo: fija el nombre EXACTO del campo que cruza
+    /// Rust -> TypeScript. Si alguien renombra la struct o quita el atributo
+    /// serde, este test falla en los 3 SO en lugar de romper en silencio.
+    #[test]
+    fn template_origin_wire_field_is_exactly_template_origin_camel_case() {
+        let inst = Instance {
+            id: Uuid::new_v4(),
+            name: "wire".into(),
+            minecraft_version: "1.20.1".into(),
+            fabric_loader: None,
+            template_origin: Some("plantilla-ejemplo".into()),
+            config_overrides: HashMap::new(),
+            ram_min_mb: None,
+            ram_max_mb: None,
+            created_at: 1,
+            last_launched_at: None,
+        };
+
+        let value = serde_json::to_value(&inst).unwrap();
+        let obj = value.as_object().unwrap();
+        assert_eq!(obj["templateOrigin"], "plantilla-ejemplo");
+        assert!(
+            !obj.contains_key("template_origin"),
+            "el cable NO debe usar snake_case: {obj:?}"
+        );
+
+        // `InstanceSummary` debe usar la misma convención.
+        let summary = serde_json::to_value(inst.summary()).unwrap();
+        assert_eq!(summary["templateOrigin"], "plantilla-ejemplo");
+        assert!(!summary.as_object().unwrap().contains_key("template_origin"));
+
+        // El alias permite leer ficheros escritos con el nombre antiguo.
+        let mut legacy = obj.clone();
+        legacy.remove("templateOrigin");
+        legacy.insert("template_origin".into(), serde_json::json!("legacy"));
+        let back: Instance = serde_json::from_value(serde_json::Value::Object(legacy)).unwrap();
+        assert_eq!(back.template_origin.as_deref(), Some("legacy"));
     }
 
     #[test]

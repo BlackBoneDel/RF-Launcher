@@ -25,6 +25,11 @@ export function SettingsView({ onBack }: Props) {
   const [javaAuto, setJavaAuto] = useState(true);
   const [totalRam, setTotalRam] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [pendingForce, setPendingForce] = useState<{
+    key: ConfigKey;
+    value: ConfigValue;
+    warning: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -47,11 +52,19 @@ export function SettingsView({ onBack }: Props) {
     return { kind: 'Int', value: Math.floor(n) };
   };
 
-  const saveGlobal = async (key: ConfigKey, value: ConfigValue) => {
+  const saveGlobal = async (key: ConfigKey, value: ConfigValue, force = false) => {
     setMessage(null);
+    setPendingForce(null);
     try {
-      await setGlobalConfig(key, value);
-      setMessage('Guardado en la configuración global.');
+      // El backend devuelve RamCheck: si ok=false y hay warning (>80% de la
+      // RAM física) NO se guardó. Hay que poder confirmarlo con force=true.
+      const res = await setGlobalConfig(key, value, force);
+      if (!res.ok && res.warning) {
+        setPendingForce({ key, value, warning: res.warning });
+        setMessage(res.warning);
+      } else {
+        setMessage('Guardado en la configuración global.');
+      }
     } catch (err) {
       setMessage('Error al guardar: ' + String(err));
     }
@@ -181,8 +194,25 @@ export function SettingsView({ onBack }: Props) {
       </div>
 
       {message && (
-        <div className="mt-4 p-3 rounded-md border border-[var(--success)] bg-[var(--success)]/10 text-[var(--success)] text-sm">
+        <div
+          className={`mt-4 p-3 rounded-md border text-sm ${
+            pendingForce
+              ? 'border-[var(--warn)] bg-[var(--warn)]/10 text-[var(--warn)]'
+              : 'border-[var(--success)] bg-[var(--success)]/10 text-[var(--success)]'
+          }`}
+        >
           {message}
+          {pendingForce && (
+            <button
+              className={`${btn} mt-2 block`}
+              onClick={() =>
+                pendingForce &&
+                void saveGlobal(pendingForce.key, pendingForce.value, true)
+              }
+            >
+              Confirmar de todos modos (force)
+            </button>
+          )}
         </div>
       )}
     </div>

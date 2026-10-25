@@ -1,6 +1,12 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import type { ConfigKey, ConfigValue, Instance, KillResult, LaunchResult, RamCheck } from '../types';
 
+/**
+ * Tauri 1 convierte los argumentos snake_case de Rust a camelCase en JS
+ * (v1.tauri.app/v1/guides/features/command/#passing-arguments). Todas las
+ * claves de los objetos de argumentos de este archivo DEBEN ser camelCase.
+ * Las respuestas, en cambio, llegan con los nombres de campo de serde.
+ */
 export async function getTheme(): Promise<string> {
   return invoke('get_theme');
 }
@@ -15,8 +21,8 @@ export async function listInstances(): Promise<Instance[]> {
 
 export async function createInstance(values: {
   name: string;
-  minecraft_version: string;
-  fabric_loader: string | null;
+  minecraftVersion: string;
+  fabricLoader: string | null;
 }): Promise<Instance> {
   return invoke('create_instance', values);
 }
@@ -26,11 +32,15 @@ export async function getInstance(id: string): Promise<Instance> {
 }
 
 export async function resolveConfig(instanceId: string, key: ConfigKey): Promise<ConfigValue> {
-  return invoke('resolve_config', { instance_id: instanceId, key });
+  return invoke('resolve_config', { instanceId, key });
 }
 
-export async function setGlobalConfig(key: ConfigKey, value: ConfigValue): Promise<void> {
-  return invoke('set_global_config', { key, value });
+export async function setGlobalConfig(
+  key: ConfigKey,
+  value: ConfigValue,
+  force = false,
+): Promise<RamCheck> {
+  return invoke('set_global_config', { key, value, force });
 }
 
 export async function setInstanceConfig(
@@ -39,7 +49,7 @@ export async function setInstanceConfig(
   value: ConfigValue,
   force = false,
 ): Promise<RamCheck> {
-  return invoke('set_instance_config', { instance_id: instanceId, key, value, force });
+  return invoke('set_instance_config', { instanceId, key, value, force });
 }
 
 export async function getSystemRam(): Promise<RamCheck> {
