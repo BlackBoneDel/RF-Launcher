@@ -5,9 +5,10 @@ import type { Instance } from '../types';
 type Props = {
   instances: Instance[];
   onCreate: () => void;
+  onRefresh: () => void;
 };
 
-export function InstanceList({ instances, onCreate }: Props) {
+export function InstanceList({ instances, onCreate, onRefresh }: Props) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
@@ -27,7 +28,7 @@ export function InstanceList({ instances, onCreate }: Props) {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {instances.map((inst) => (
-            <InstanceCard key={inst.id} instance={inst} onStatusChange={() => {}} />
+            <InstanceCard key={inst.id} instance={inst} onStatusChange={onRefresh} />
           ))}
         </div>
       )}

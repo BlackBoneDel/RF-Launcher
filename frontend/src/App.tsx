@@ -105,7 +105,7 @@ export default function App() {
 
       <main className="p-6">
         {view === 'instances' && (
-          <InstanceList instances={instances} onCreate={() => setView('create')} />
+          <InstanceList instances={instances} onCreate={() => setView('create')} onRefresh={refresh} />
         )}
         {view === 'create' && (
           <CreateInstanceForm
