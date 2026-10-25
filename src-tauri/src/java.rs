@@ -146,8 +146,9 @@ impl JavaManager {
         let os = adoptium_os();
         let arch = adoptium_arch();
         let url = format!("{ADOPTIUM_BASE}/assets/feature_releases/{version}/ga");
+        println!("ADOPTIUM_API_URL={url} os={os} arch={arch}");
 
-        if let Ok(response) = reqwest::Client::new()
+        let request = reqwest::Client::new()
             .get(&url)
             .query(&[
                 ("os", os),
@@ -158,40 +159,55 @@ impl JavaManager {
                 ("heap_size", "normal"),
                 ("page_size", "20"),
             ])
-            .header("User-Agent", "rf-launcher/0.1")
-            .send()
-            .await
-        {
-            if response.status().is_success() {
-                if let Ok(body) = response.json::<Value>().await {
-                    if let Some(releases) = body.as_array() {
-                        for release in releases {
-                            if let Some(binaries) =
-                                release.get("binaries").and_then(|v| v.as_array())
-                            {
-                                for bin in binaries {
-                                    if let Some(asset) = extract_asset(bin, arch, os) {
-                                        return Ok(asset);
+            .header("User-Agent", "rf-launcher/0.1");
+
+        match request.send().await {
+            Ok(response) => {
+                let status = response.status();
+                println!("ADOPTIUM_API_STATUS={status}");
+                if status.is_success() {
+                    match response.json::<Value>().await {
+                        Ok(body) => {
+                            if let Some(releases) = body.as_array() {
+                                println!("ADOPTIUM_API_RELEASES={}", releases.len());
+                                for release in releases {
+                                    if let Some(binaries) =
+                                        release.get("binaries").and_then(|v| v.as_array())
+                                    {
+                                        for bin in binaries {
+                                            if let Some(asset) = extract_asset(bin, arch, os) {
+                                                println!("ADOPTIUM_API_ASSET={}", asset.link);
+                                                return Ok(asset);
+                                            }
+                                        }
+                                    }
+                                    // Algunos endpoints devuelven `binary` en singular.
+                                    if let Some(bin) = release.get("binary") {
+                                        if let Some(asset) = extract_asset(bin, arch, os) {
+                                            println!("ADOPTIUM_API_ASSET={}", asset.link);
+                                            return Ok(asset);
+                                        }
                                     }
                                 }
-                            }
-                            // Algunos endpoints devuelven `binary` en singular.
-                            if let Some(bin) = release.get("binary") {
-                                if let Some(asset) = extract_asset(bin, arch, os) {
-                                    return Ok(asset);
-                                }
+                                println!("ADOPTIUM_API_NO_SUITABLE_PACKAGE=1");
+                            } else {
+                                println!("ADOPTIUM_API_BODY_NOT_ARRAY=1");
                             }
                         }
+                        Err(e) => println!("ADOPTIUM_API_JSON_ERR={e}"),
                     }
                 }
             }
+            Err(e) => println!("ADOPTIUM_API_ERR={e}"),
         }
 
         // Fallback documentado: descarga directa (sin checksum en la URL).
+        let fallback = format!(
+            "{ADOPTIUM_BASE}/binary/latest/{version}/ga/{os}/{arch}/jdk/hotspot/normal/eclipse"
+        );
+        println!("ADOPTIUM_API_FALLBACK={fallback}");
         Ok(AdoptiumAsset {
-            link: format!(
-                "{ADOPTIUM_BASE}/binary/latest/{version}/ga/{os}/{arch}/jdk/hotspot/normal/eclipse"
-            ),
+            link: fallback,
             checksum: None,
         })
     }
@@ -204,8 +220,14 @@ impl JavaManager {
             .get(&asset.link)
             .header("User-Agent", "rf-launcher/0.1")
             .send()
-            .await?
+            .await
+            .map_err(|e| format!("ADOPTIUM_DOWNLOAD_ERR url={} error={e}", asset.link))?
             .error_for_status()?;
+        println!(
+            "ADOPTIUM_DOWNLOAD_FINAL_URL={} STATUS={}",
+            response.url(),
+            response.status()
+        );
         let final_path = response.url().path().to_string();
         let is_tar = final_path.ends_with(".tar.gz") || asset.link.contains(".tar.gz");
         let suffix = if is_tar { "tar.gz" } else { "zip" };

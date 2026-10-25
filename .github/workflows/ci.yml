@@ -96,6 +96,39 @@ jobs:
             2>&1 | tee cargo_test.log
         working-directory: src-tauri
 
+      # Sonda de red INDEPENDIENTE de nuestro código Rust. Permite distinguir
+      # "el runner no alcanza Adoptium" de "nuestro pick_asset está mal".
+      - name: Sonda de red Adoptium en este runner
+        if: always()
+        run: |
+          set +e
+          : > adoptium_probe.log
+          case "$RUNNER_OS" in
+            Windows) OS=windows;; macOS) OS=mac;; *) OS=linux;;
+          esac
+          case "$(uname -m)" in arm64|aarch64) ARCH=aarch64;; *) ARCH=x64;; esac
+          URL="https://api.adoptium.net/v3/assets/feature_releases/21/ga?os=$OS&architecture=$ARCH&image_type=jdk&jvm_impl=hotspot&vendor=eclipse&heap_size=normal&page_size=5"
+          echo "ADOPTIUM_PROBE_OS=$OS ARCH=$ARCH" | tee -a adoptium_probe.log
+          echo "ADOPTIUM_PROBE_URL=$URL" | tee -a adoptium_probe.log
+          curl -sS --max-time 45 -o adoptium_probe.json \
+            -w "ADOPTIUM_PROBE_HTTP=%{http_code} TIME=%{time_total} SIZE=%{size_download}\n" \
+            "$URL" 2>&1 | tee -a adoptium_probe.log
+          python3 - <<'EOF' | tee -a adoptium_probe.log
+          import json, os
+          try:
+              d = json.load(open('adoptium_probe.json'))
+              print("ADOPTIUM_PROBE_RELEASES=", len(d) if isinstance(d, list) else type(d).__name__)
+              if isinstance(d, list) and d:
+                  pkg = d[0].get('binaries', [{}])[0].get('package', {})
+                  print("ADOPTIUM_PROBE_FIRST_LINK=", pkg.get('link'))
+                  print("ADOPTIUM_PROBE_FIRST_CHECKSUM_LEN=", len(pkg.get('checksum') or ''))
+          except Exception as e:
+              print("ADOPTIUM_PROBE_PARSE_ERR=", repr(e))
+              print("ADOPTIUM_PROBE_BODY_HEAD=", open('adoptium_probe.json', errors='replace').read()[:300])
+          EOF
+          cat adoptium_probe.log
+        working-directory: src-tauri
+
       # PARTE E: descarga REAL de un JDK desde Adoptium en los 3 SO.
       # Si Adoptium bloquea un runner, este paso FALLA con el error real;
       # no se usa continue-on-error ni se marca como "hecho" en el informe.
@@ -117,7 +150,7 @@ jobs:
       # ---------------- Línea base de RAM en reposo, los 3 SO ----------------
       # Cada SO escribe el MISMO fichero clave=valor: src-tauri/ram_baseline.txt
       - name: Línea base de RAM en reposo (Linux)
-        if: "runner.os == 'Linux'"
+        if: "!cancelled() && runner.os == 'Linux'"
         run: |
           set +e
           : > ram_baseline.txt
@@ -150,7 +183,7 @@ jobs:
         working-directory: src-tauri
 
       - name: Línea base de RAM en reposo (macOS)
-        if: "runner.os == 'macOS'"
+        if: "!cancelled() && runner.os == 'macOS'"
         run: |
           set +e
           : > ram_baseline.txt
@@ -204,7 +237,7 @@ jobs:
         working-directory: src-tauri
 
       - name: Línea base de RAM en reposo (Windows)
-        if: "runner.os == 'Windows'"
+        if: "!cancelled() && runner.os == 'Windows'"
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
@@ -269,12 +302,18 @@ jobs:
               results = [l for l in lines if l.startswith("test result:")]
               failed = [l for l in lines if "FAILED" in l]
               markers = [l for l in lines if re.search(
-                  r"(ADOPTIUM_SMOKE|MOJANG_SMOKE|KILL_TEST_CHILD_RSS_KB|RAM_FISICA_MB|"
+                  r"(ADOPTIUM_SMOKE|ADOPTIUM_API|ADOPTIUM_DOWNLOAD|MOJANG_SMOKE|"
+                  r"KILL_TEST_CHILD_RSS_KB|RAM_FISICA_MB|"
                   r"kill_really_terminates|truncated_download|interrupted_install)", l)]
               notice("evidence-tests", f"[{p}]\n" + "\n".join((results + failed[:8] + markers[:14]) or ["sin datos"]))
               phys = [l for l in lines if "RAM_FISICA_MB=" in l]
               if phys:
                   notice("evidence-ram-physical", "\n".join(phys))
+          p = "src-tauri/adoptium_probe.log"
+          if os.path.exists(p):
+              notice("evidence-adoptium-probe", open(p, errors="replace").read()[-2500:])
+          else:
+              notice("evidence-adoptium-probe", "NO EXISTE adoptium_probe.log")
           p = "src-tauri/ram_baseline.txt"
           if os.path.exists(p):
               body = open(p, errors="replace").read()
@@ -334,5 +373,7 @@ jobs:
             src-tauri/cargo_smoke_mojang.log
             src-tauri/launcher_ram.log
             src-tauri/ram_baseline.txt
+            src-tauri/adoptium_probe.log
+            src-tauri/adoptium_probe.json
           if-no-files-found: ignore
           retention-days: 14

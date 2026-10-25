@@ -257,8 +257,15 @@ mod tests {
         let mut blocks: Vec<Vec<u8>> = Vec::new();
         for _ in 0..96 {
             let mut block = vec![0u8; 1024 * 1024];
-            block[0] = 0x5A;
-            block[1024 * 1024 - 1] = 0xA5;
+            // Tocar TODAS las páginas: `vec![0u8; N]` usa memoria zeroed que
+            // el SO puede mapear de forma perezosa. Escribir solo 2 bytes por
+            // bloque dejaba el RSS real en ~10 MB (medido en CI), no en 96 MB.
+            let mut i = 0usize;
+            while i < block.len() {
+                block[i] = 0x5A;
+                i += 4096;
+            }
+            block[block.len() - 1] = 0xA5;
             blocks.push(block);
         }
         assert_eq!(blocks.len(), 96);
