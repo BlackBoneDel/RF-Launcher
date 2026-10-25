@@ -96,6 +96,28 @@ jobs:
           cat launcher_ram.log
         working-directory: src-tauri
 
+      - name: Publicar salida de cargo como anotaciones legibles vía API
+        if: failure()
+        continue-on-error: true
+        run: |
+          python3 - <<'EOF'
+          import os
+          paths = ["src-tauri/cargo_build.log", "src-tauri/cargo_test.log", "src-tauri/cargo_smoke.log"]
+          text = ""
+          for p in paths:
+              if os.path.exists(p):
+                  text += "\n===== " + p + " =====\n" + open(p, errors="replace").read()
+          if not text.strip():
+              text = "No se encontraron logs de cargo."
+          text = text[-48000:]
+          def enc(s):
+              return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          size = 12000
+          chunks = [text[i:i+size] for i in range(0, len(text), size)][:4]
+          for i, chunk in enumerate(chunks):
+              print(f"::error title=cargo-log-{i}::" + enc(chunk))
+          EOF
+
       - name: Subir logs como artefacto si algo falla
         if: failure()
         uses: actions/upload-artifact@v4
