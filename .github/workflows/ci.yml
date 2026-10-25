@@ -118,7 +118,11 @@ jobs:
               results = [l for l in lines if l.startswith("test result:")]
               failed = [l for l in lines if "FAILED" in l]
               java = [l for l in lines if "Adoptium" in l or "Mojang" in l or "majorVersion" in l]
-              notice("evidence-tests", f"[{p}]\n" + "\n".join((results + failed[:8] + java[:8]) or ["sin datos"]))
+              phys = [l for l in lines if "RAM_FISICA_MB=" in l]
+              kill = [l for l in lines if "kill_really_terminates" in l or "PID" in l]
+              notice("evidence-tests", f"[{p}]\n" + "\n".join((results + failed[:8] + java[:8] + kill[:8]) or ["sin datos"]))
+              if phys:
+                  notice("evidence-ram-physical", "\n".join(phys))
           p = "src-tauri/launcher_ram.log"
           if os.path.exists(p):
               txt = open(p, errors="replace").read()

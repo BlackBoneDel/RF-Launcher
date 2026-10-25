@@ -50,6 +50,17 @@ pub fn process_exists(pid: u32) -> bool {
 mod tests {
     use super::*;
 
+    /// Este test no sólo comprueba que la detección funciona: IMPRIME el valor
+    /// real leído por sysinfo en cada SO de la matriz de CI, de modo que la
+    /// línea base de recursos queda registrada como evidencia verificable.
+    #[test]
+    fn ram_detection_reads_real_physical_memory() {
+        let mb = total_ram_mb();
+        println!("RAM_FISICA_MB={mb}");
+        assert!(mb > 0, "sysinfo debe leer RAM física positiva en este SO");
+        assert!(mb < 2_000_000, "valor improbable: {mb} MB");
+    }
+
     #[test]
     fn ram_exceeds_physical_is_rejected() {
         assert!(matches!(

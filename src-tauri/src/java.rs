@@ -46,6 +46,16 @@ impl JavaManager {
         }
     }
 
+    /// Una instalación sólo se considera válida si existe el binario Y el
+    /// marcador `.rf-launcher-ok`, que se escribe al FINAL de una instalación
+    /// correcta. Sin este marcador, un `jdk-{version}` dejado por una descarga
+    /// cortada a mitad (o por un corte de luz) se reutilizaría como si fuera
+    /// válido: el binario puede existir pero estar incompleto.
+    fn is_installed(&self, version: u32) -> bool {
+        self.java_binary(version).exists()
+            && self.java_home(version).join(".rf-launcher-ok").exists()
+    }
+
     /// Devuelve la ruta del java ya instalado o lo descarga de Adoptium.
     ///
     /// Las instalaciones gestionadas viven bajo `data_dir/java/`: nunca se
@@ -54,13 +64,11 @@ impl JavaManager {
     /// Consistencia ante fallos: todo el trabajo se hace en un directorio
     /// `.staging-{version}`. Si CUALQUIER paso falla (API caída, red cortada
     /// a mitad de la descarga, checksum incorrecto, extracción inválida) se
-    /// borran staging y los temporales de descarga y se devuelve el error.
-    /// Nunca se deja un `jdk-{version}` a medio instalar: un reinicio
-    /// simplemente reintenta la descarga desde cero.
+    /// borran staging, el temporal de descarga y el directorio de destino, y
+    /// se devuelve el error. El marcador se escribe SÓLO tras el rename final.
     pub async fn ensure(&self, version: u32) -> Result<PathBuf> {
-        let binary = self.java_binary(version);
-        if binary.exists() {
-            return Ok(binary);
+        if self.is_installed(version) {
+            return Ok(self.java_binary(version));
         }
 
         fs::create_dir_all(&self.java_dir)?;
@@ -104,6 +112,9 @@ impl JavaManager {
             .ok_or("No se pudo determinar el JAVA HOME extraído")?;
         let _ = fs::remove_dir_all(home);
         fs::rename(extracted_home, home)?;
+        // Marcador de instalación COMPLETA, escrito al final. Si el proceso
+        // muere antes de aquí, `is_installed` será false y se reintentará.
+        fs::write(home.join(".rf-launcher-ok"), b"rf-launcher\n")?;
 
         let _ = fs::remove_file(&archive);
         let _ = fs::remove_dir_all(staging);
@@ -579,6 +590,56 @@ mod tests {
         let expected = hex_encode(&hasher.finalize());
         assert!(verify_sha256(&file, &expected).is_ok());
         assert!(verify_sha256(&file, "0000000000000000000000000000000000000000000000000000000000000000").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Simula una descarga cortada a mitad: el fichero temporal queda truncado
+    /// y el checksum del artefacto completo NO debe validar.
+    #[test]
+    fn truncated_download_fails_checksum() {
+        let dir = temp_dir().join("rf-truncated-checksum-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let full = b"JDK-COMPLETO-1234567890abcdefghijklmnopqrstuvwxyz";
+        let mut hasher = Sha256::new();
+        hasher.update(full);
+        let expected = hex_encode(&hasher.finalize());
+
+        let partial = dir.join(".download-1.tar.gz");
+        fs::write(&partial, &full[..12]).unwrap(); // red cortada a los 12 bytes
+        assert!(
+            verify_sha256(&partial, &expected).is_err(),
+            "una descarga truncada NUNCA debe pasar la verificación SHA-256"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Simula el estado que deja un proceso muerto a mitad de instalación:
+    /// binario presente pero sin marcador, staging y temporal de descarga
+    /// huérfanos. Tras la limpieza no debe quedar una instalación reutilizable.
+    #[test]
+    fn interrupted_install_leaves_no_reusable_half_jdk() {
+        let dir = temp_dir().join(format!("rf-interrupted-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mgr = JavaManager::new(dir.clone());
+
+        let home = mgr.java_home(21);
+        fs::create_dir_all(home.join("bin")).unwrap();
+        let bin_name = if cfg!(windows) { "java.exe" } else { "java" };
+        fs::write(home.join("bin").join(bin_name), b"JDK A MEDIAS").unwrap();
+        fs::write(dir.join(".download-7.tar.gz"), b"parcial").unwrap();
+        fs::create_dir_all(dir.join(".staging-21").join("jdk-21.0.5")).unwrap();
+
+        // El binario existe, pero NO hay marcador: no se puede reutilizar.
+        assert!(mgr.java_binary(21).exists());
+        assert!(
+            !mgr.is_installed(21),
+            "sin marcador de instalación completa, ensure() debe reintentar"
+        );
+
+        mgr.clean_stale_artifacts(21);
+        assert!(!dir.join(".download-7.tar.gz").exists(), "temporal huérfano");
+        assert!(!dir.join(".staging-21").exists(), "staging huérfano");
         let _ = fs::remove_dir_all(&dir);
     }
 }
