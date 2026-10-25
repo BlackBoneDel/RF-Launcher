@@ -34,37 +34,58 @@ jobs:
 
       - name: Instalar dependencias de sistema (Linux)
         if: "runner.os == 'Linux'"
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.0-dev
+        run: |
+          set -o pipefail
+          sudo apt-get update > apt.log 2>&1
+          sudo apt-get install -y libwebkit2gtk-4.0-dev > apt_packages.log 2>&1 || sudo apt-get install -y libwebkit2gtk-4.1-dev >> apt_packages.log 2>&1
 
       - name: Instalar dependencias de frontend
-        run: npm ci
-        working-directory: frontend
+        run: npm ci > frontend/npm_ci.log 2>&1
 
       - name: Type-check y build del frontend (Vite)
-        run: npm run build
+        run: npm run build > frontend/npm_build.log 2>&1
         working-directory: frontend
 
       - name: Build del backend Rust (release)
-        run: cargo build --release
+        run: |
+          set -o pipefail
+          cargo build --release 2>&1 | tee cargo_build.log
         working-directory: src-tauri
 
-      - name: Ejecutar tests de Rust (motor de configuración, instancia, RAM, mapeo Java)
-        run: cargo test
+      - name: Ejecutar tests de Rust
+        run: cargo test 2>&1 | tee cargo_test.log
         working-directory: src-tauri
 
-      - name: Smoke test descarga real de Java 21 desde Adoptium (solo Linux)
+      - name: Smoke test descarga real de Java 21 desde Adoptium (Linux)
         if: "runner.os == 'Linux'"
-        run: cargo test ensure_java_21_downloads_from_adoptium -- --nocapture
+        run: cargo test ensure_java_21_downloads_from_adoptium -- --nocapture 2>&1 | tee cargo_smoke.log
         working-directory: src-tauri
 
-      - name: Línea base de RAM del launcher en reposo (solo Linux)
+      - name: Línea base de RAM del launcher en reposo (Linux)
         if: "runner.os == 'Linux'"
         run: |
-          sudo apt-get install -y xvfb
-          xvfb-run -a ./target/release/rf-launcher &
+          sudo apt-get install -y xvfb > xvfb.log 2>&1
+          xvfb-run -a ./target/release/rf-launcher > launcher_ram.log 2>&1 &
           PID=$!
           sleep 10
-          echo "=== RSS del launcher en reposo (sin instancias) ==="
-          if [ -d "/proc/$PID" ]; then grep -E 'VmRSS|VmSize|VmPeak' /proc/$PID/status || true; else echo "El proceso no está ejecutándose"; fi
+          echo "=== RSS del launcher en reposo (sin instancias corriendo) ==="
+          if [ -d "/proc/$PID" ]; then grep -E 'VmRSS|VmSize|VmPeak' /proc/$PID/status || true; else echo "El proceso no está ejecutándose"; fi >> launcher_ram.log
           kill $PID 2>/dev/null || true
           wait $PID 2>/dev/null || true
+
+      - name: Subir logs de diagnóstico si falló algo
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs-${{ matrix.os }}
+          path: |
+            apt.log
+            apt_packages.log
+            frontend/npm_ci.log
+            frontend/npm_build.log
+            src-tauri/cargo_build.log
+            src-tauri/cargo_test.log
+            src-tauri/cargo_smoke.log
+            src-tauri/xvfb.log
+            src-tauri/launcher_ram.log
+          retention-days: 7
