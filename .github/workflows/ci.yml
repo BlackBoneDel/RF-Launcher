@@ -100,23 +100,38 @@ jobs:
             tail -c 60000 /tmp/ci_diag.log > /tmp/ci_diag.trunc && mv /tmp/ci_diag.trunc /tmp/ci_diag.log
           fi
           python3 - <<'EOF'
-          import json, os, urllib.request, urllib.error
-          body = open("/tmp/ci_diag.log").read()
-          payload = json.dumps({"title": "CI falló en ${{ matrix.os }}", "body": body}).encode()
-          req = urllib.request.Request(
-              "https://api.github.com/repos/BlackBoneDel/RF-Launcher/issues",
-              data=payload,
-              headers={
-                  "Authorization": "token " + os.environ["GITHUB_TOKEN"],
-                  "Accept": "application/vnd.github+json",
-                  "User-Agent": "rf-launcher-ci",
-                  "Content-Type": "application/json",
-              },
-              method="POST",
-          )
+          import json, os, traceback, urllib.request, urllib.error
+          lines = []
+          lines.append("GITHUB_TOKEN presente: " + ("sí" if os.environ.get("GITHUB_TOKEN") else "NO"))
           try:
+              body_log = open("/tmp/ci_diag.log").read()
+          except Exception as e:
+              body_log = f"No se pudo leer /tmp/ci_diag.log: {e}"
+          title = "CI falló en ${{ matrix.os }}"
+          body = body_log
+          if len(body) > 60000:
+              body = body[-60000:]
+          payload = json.dumps({"title": title, "body": body}).encode()
+          try:
+              req = urllib.request.Request(
+                  "https://api.github.com/repos/BlackBoneDel/RF-Launcher/issues",
+                  data=payload,
+                  headers={"Authorization": "token " + os.environ.get("GITHUB_TOKEN", ""),
+                           "Accept": "application/vnd.github+json",
+                           "User-Agent": "rf-launcher-ci",
+                           "Content-Type": "application/json"},
+                  method="POST",
+              )
               with urllib.request.urlopen(req) as resp:
-                  print("Issue creado:", resp.status)
-          except urllib.error.HTTPError as e:
-              print("GitHub API rechazó la creación del issue:", e.code, e.read().decode()[:500])
+                  lines.append("Issue creado HTTP " + str(resp.status))
+          except Exception as e:
+              lines.append("Excepción creando issue: " + repr(e))
+              payload2 = json.dumps({"title": title + " (error de diagnóstico)", "body": "\n".join(lines)}).encode()
+              try:
+                  req2 = urllib.request.Request("https://api.github.com/repos/BlackBoneDel/RF-Launcher/issues", data=payload2, headers={"Authorization": "token " + os.environ.get("GITHUB_TOKEN", ""), "Accept": "application/vnd.github+json", "User-Agent": "rf-launcher-ci", "Content-Type": "application/json"}, method="POST")
+                  with urllib.request.urlopen(req2) as resp:
+                      lines.append("Issue de error creado HTTP " + str(resp.status))
+              except Exception as e2:
+                  lines.append("Fallo total: " + repr(e2))
+          print("\n".join(lines))
           EOF
