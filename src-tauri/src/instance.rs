@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use crate::config::{ConfigKey, ConfigValue};
-use crate::error::Result;
+use crate::error::{LauncherError, Result};
 
 /// Una instancia de Minecraft aislada: versión, loader, overrides de
 /// configuración y su propia carpeta de datos en disco.

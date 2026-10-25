@@ -15,38 +15,46 @@ use std::sync::Mutex;
 
 use tauri::Manager;
 
+use crate::launcher::Launcher;
 use crate::state::{AppState, Inner};
 
 fn main() {
     tauri::Builder::default()
-        .setup(|app| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        .setup(|app| {
+            // Se usa `expect` en lugar de `?` para no depender del tipo exacto
+            // de error que el closure `setup` de Tauri 1 acepta en cada versión.
             let handle = app.handle();
             let data_dir = handle
                 .path_resolver()
                 .app_data_dir()
-                .ok_or("No se pudo resolver el directorio de datos de la aplicación")?;
+                .expect("No se pudo resolver el directorio de datos de la aplicación");
 
-            fs::create_dir_all(data_dir.join("instances"))?;
-            fs::create_dir_all(data_dir.join("java"))?;
-            fs::create_dir_all(data_dir.join("assets"))?;
-            fs::create_dir_all(data_dir.join("logs"))?;
+            fs::create_dir_all(data_dir.join("instances"))
+                .expect("No se pudo crear data_dir/instances");
+            fs::create_dir_all(data_dir.join("java"))
+                .expect("No se pudo crear data_dir/java");
+            fs::create_dir_all(data_dir.join("assets"))
+                .expect("No se pudo crear data_dir/assets");
+            fs::create_dir_all(data_dir.join("logs"))
+                .expect("No se pudo crear data_dir/logs");
 
             let instances_dir = data_dir.join("instances");
             let java_dir = data_dir.join("java");
             let assets_dir = data_dir.join("assets");
-            let config = crate::config::ConfigEngine::new(data_dir.clone())?;
+            let config = crate::config::ConfigEngine::new(data_dir.clone())
+                .expect("No se pudo inicializar el motor de configuración");
+
             let inner = Inner {
                 data_dir,
-                instances_dir,
+                instances_dir: instances_dir.clone(),
                 java_dir,
                 assets_dir,
                 config,
-                launcher: Mutex::new(Launcher::new(instances_dir.clone())),
+                launcher: Mutex::new(Launcher::new(instances_dir)),
             };
             app.handle().manage(AppState {
                 inner: Mutex::new(inner),
             });
-            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_theme,
@@ -61,5 +69,6 @@ fn main() {
             commands::launch_instance,
             commands::kill_instance,
         ])
-        .run(tauri::generate_context!());
+        .run(tauri::generate_context!())
+        .expect("Error al ejecutar RF Launcher");
 }

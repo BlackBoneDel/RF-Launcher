@@ -40,7 +40,9 @@ pub fn validate_ram_max(requested_mb: u64, total_mb: u64) -> RamValidation {
 /// Comprueba si un PID todavía existe en el sistema (usado para verificar que
 /// "matar instancia" realmente terminó el proceso).
 pub fn process_exists(pid: u32) -> bool {
-    let mut system = System::new_all();
+    // `System::new_all()` carga también la tabla de procesos (verificado en
+    // docs.rs/sysinfo/0.32.1). Se usa tanto en Linux como en Windows/macOS.
+    let system = System::new_all();
     system.process(Pid::from_u32(pid)).is_some()
 }
 

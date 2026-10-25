@@ -1,29 +1,40 @@
 {
-  "productName": "RF Launcher",
-  "version": "0.1.0",
-  "identifier": "dev.rf.launcher",
   "build": {
-    "frontendDist": "../frontend/dist",
-    "devUrl": "http://localhost:1420",
+    "distDir": "../frontend/dist",
+    "devPath": "http://localhost:1420",
     "beforeDevCommand": "cd ../frontend && npm run dev",
     "beforeBuildCommand": "cd ../frontend && npm run build",
-    "buildCommand": "cd ../frontend && npm run build"
+    "withGlobalTauri": false
   },
-  "app": {
+  "package": {
+    "productName": "RF Launcher",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false
+    },
+    "bundle": {
+      "active": false,
+      "identifier": "dev.rf.launcher",
+      "icon": []
+    },
+    "security": {
+      "csp": null
+    },
+    "updater": {
+      "active": false
+    },
     "windows": [
       {
         "title": "RF Launcher",
         "width": 1200,
         "height": 800,
-        "resizable": true,
         "minWidth": 900,
-        "minHeight": 600
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
       }
     ]
-  },
-  "security": {
-    "csp": null,
-    "capabilities": ["default"]
-  },
-  "plugins": []
+  }
 }

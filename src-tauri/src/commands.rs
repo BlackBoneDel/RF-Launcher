@@ -1,8 +1,3 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
-
 use serde::Serialize;
 use tauri::State;
 use uuid::Uuid;
@@ -11,7 +6,7 @@ use crate::config::{ConfigKey, ConfigValue};
 use crate::error::{LauncherError, Result};
 use crate::instance::Instance;
 use crate::java::{JavaManager, java_version_for_minecraft_resolved};
-use crate::launcher::{KillResult, Launcher};
+use crate::launcher::KillResult;
 use crate::minecraft::resolve as mc_resolve;
 use crate::ram::{total_ram_mb, validate_ram_max, RamValidation};
 use crate::state::AppState;
@@ -253,7 +248,7 @@ pub async fn launch_instance(state: State<'_, AppState>, id: String) -> Result<L
 
     // 5. Spawn del proceso y actualización de marca de último lanzamiento.
     let pid = {
-        let mut inner = state.inner.lock().map_err(|e| LauncherError::Custom(e.to_string()))?;
+        let inner = state.inner.lock().map_err(|e| LauncherError::Custom(e.to_string()))?;
         let mut launcher = inner
             .launcher
             .lock()
@@ -303,9 +298,4 @@ pub struct LaunchResult {
     pub error: Option<String>,
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
+

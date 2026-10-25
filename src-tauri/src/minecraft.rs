@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 use sha1::{Digest, Sha1};
@@ -182,10 +182,16 @@ pub async fn resolve(
         .and_then(|v| v.as_str())
         .unwrap_or("1.20")
         .to_string();
-    // Descargar índice de assets (los objetos se descargan bajo demanda por el juego).
+    // El índice debe vivir en <assets_root>/indexes/<id>.json (los objetos
+    // los descarga el propio cliente bajo demanda).
     if let Some(ai) = version_json.get("assetIndex").and_then(|v| v.get("url")) {
         if let Some(url) = ai.as_str() {
-            let _ = download_file(url, &assets_dir.join(format!("{assets_index}.json")), None).await;
+            let _ = download_file(
+                url,
+                &assets_dir.join("indexes").join(format!("{assets_index}.json")),
+                None,
+            )
+            .await;
         }
     }
 
@@ -223,12 +229,24 @@ pub async fn resolve(
     jvm_args_all.extend(jvm_args);
 
     fs::create_dir_all(&game_dir)?;
-    let game_args = version_json
+    // Versiones >= 1.13 usan `arguments.game` (array). Las anteriores usan
+    // `minecraftArguments` (string con placeholders separados por espacios).
+    let game_args: Vec<String> = match version_json
         .get("arguments")
         .and_then(|a| a.get("game"))
         .and_then(|v| v.as_array())
-        .map(|arr| resolve_json_args(arr, &ctx))
-        .unwrap_or_default();
+    {
+        Some(arr) => resolve_json_args(arr, &ctx),
+        None => version_json
+            .get("minecraftArguments")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                s.split_whitespace()
+                    .map(|arg| substitute(arg, &ctx))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
 
     let log_file = instances_dir
         .join(instance_id.to_string())
@@ -313,6 +331,9 @@ async fn download_file(url: &str, dest: &Path, sha1: Option<&str>) -> Result<()>
     if dest.exists() {
         return Ok(());
     }
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let tmp = dest.with_extension("tmp");
     let mut response = reqwest::Client::new().get(url).send().await?.error_for_status()?;
     let mut file = fs::File::create(&tmp)?;
@@ -335,9 +356,8 @@ async fn download_file(url: &str, dest: &Path, sha1: Option<&str>) -> Result<()>
 }
 
 fn sha1_of_file(file: &Path) -> Result<String> {
-    use std::io::Read;
     let mut f = fs::File::open(file)?;
-    let mut hasher = sha1::Sha1::new();
+    let mut hasher = Sha1::new();
     let mut buf = [0u8; 65536];
     loop {
         let n = f.read(&mut buf)?;
@@ -393,7 +413,8 @@ fn resolve_json_args(args: &[Value], ctx: &LaunchContext) -> Vec<String> {
 }
 
 fn rules_apply_value(rules: &Value) -> bool {
-    let arr = rules.as_array().unwrap_or(&vec![]);
+    let empty: Vec<Value> = Vec::new();
+    let arr = rules.as_array().unwrap_or(&empty);
     let mut allowed = true;
     for rule in arr {
         let action = rule.get("action").and_then(|v| v.as_str()).unwrap_or("allow");
@@ -414,7 +435,8 @@ fn substitute(arg: &str, ctx: &LaunchContext) -> String {
     let mut s = arg.to_string();
     macro_rules! repl {
         ($pat:expr, $val:expr) => {{
-            s = s.replace($pat, &$val);
+            let value: String = ($val).to_string();
+            s = s.replace($pat, &value);
         }};
     }
     repl!("${auth_player_name}", ctx.auth_player_name);

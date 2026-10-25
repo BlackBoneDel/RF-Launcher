@@ -1,34 +1,36 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
 use crate::error::{LauncherError, Result};
+use crate::instance::Instance;
 use crate::ram::process_exists;
 
 /// Instancia de juego en ejecución (seguimiento en memoria únicamente).
 pub struct RunningInstance {
+    pub child: Child,
     pub pid: u32,
     pub log_path: PathBuf,
 }
 
 /// Gestor de procesos de juego lanzados.
 ///
-/// Diseño de ciclo de vida (documentado en el informe): el juego se lanza como
-/// proceso independiente del launcher. El manejador de `std::process::Child`
-/// se `forget` tras el spawn, por lo que:
-///  * Cerrar el launcher NO mata el juego (el juego sigue vivo, adoptado por init).
-///  * Al reiniciar el launcher se pierde el tracking de partidas en curso.
-///  * "Matar instancia" funciona solo sobre lo que el launcher ha lanzado en
-///    esta sesión.
+/// DECISIÓN DE DISEÑO (documentada en el informe): el juego se lanza como
+/// proceso independiente del launcher. Se conserva el `Child` en memoria
+/// (NO se hace `mem::forget`), porque `drop(Child)` NO mata el proceso:
+/// simplemente cierra el handle. Así, al cerrar el launcher el juego sigue
+/// vivo (reparentado a init/systemd o con el handle liberado en Windows),
+/// que es el comportamiento esperado por cualquier usuario de Minecraft.
 ///
-/// Esta es la semántica esperada por usuarios de Minecraft; la alternativa
-/// (matar el juego al cerrar el launcher) sería sorprendente y perdedora de
-/// progreso.
+/// Conservar el `Child` tiene además una ventaja crítica: permite `wait()`
+/// para REAPARECER (reap) el proceso. Sin eso, en Unix un proceso muerto
+/// queda como zombi y `sysinfo` seguiría listándolo, haciendo imposible
+/// verificar de verdad que "matar instancia" funcionó.
 pub struct Launcher {
     instances_dir: PathBuf,
     pub running: HashMap<Uuid, RunningInstance>,
@@ -42,8 +44,13 @@ impl Launcher {
         }
     }
 
-    /// Lanza el proceso de Java con los argumentos ya resueltos.
+    pub fn instances_dir(&self) -> &Path {
+        &self.instances_dir
+    }
+
+    /// Lanza el proceso real de Java con los argumentos ya resueltos.
     /// Devuelve el PID y registra la instancia como en ejecución.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         &mut self,
         instance: &Instance,
@@ -58,19 +65,19 @@ impl Launcher {
         log_file: &Path,
     ) -> Result<u32> {
         if let Some(parent) = log_file.parent() {
-            fs_create_dir_all(parent)?;
+            std::fs::create_dir_all(parent)?;
         }
         let log_path = log_file.to_path_buf();
-        let log_file = File::create(&log_path)?;
-        let log_err = log_file.try_clone()?;
+        let stdout = File::create(&log_path)?;
+        let stderr = stdout.try_clone()?;
 
         let mut cmd = Command::new(java_path);
-        cmd.arg(format!("-Xms{min}m", min = ram_min_mb))
-            .arg(format!("-Xmx{max}m", max = ram_max_mb));
+        cmd.arg(format!("-Xms{ram_min_mb}m"))
+            .arg(format!("-Xmx{ram_max_mb}m"));
         for arg in jvm_extra_args {
             cmd.arg(arg);
         }
-        cmd.arg("-Dminecraft.launcher.launcher=rf-launcher")
+        cmd.arg("-Dminecraft.launcher.brand=rf-launcher")
             .arg("-cp")
             .arg(classpath_string(classpath))
             .arg(main_class);
@@ -78,35 +85,38 @@ impl Launcher {
             cmd.arg(arg);
         }
         cmd.current_dir(working_dir)
-            .stdout(log_file)
-            .stderr(log_err)
+            .stdout(stdout)
+            .stderr(stderr)
             .stdin(Stdio::null());
 
-        let mut child = cmd.spawn()?;
+        let child = cmd.spawn()?;
         let pid = child
             .id()
-            .ok_or_else(|| LauncherError::Custom("java no devolvió PID".into()))?;
-        // Desvincular el proceso del launcher: el juego vive por su cuenta.
-        std::mem::forget(child);
+            .ok_or_else(|| LauncherError::Custom("java no devolvió un PID".into()))?;
 
         self.running.insert(
             instance.id,
             RunningInstance {
+                child,
                 pid,
-                log_path: log_file.to_path_buf(),
+                log_path,
             },
         );
         Ok(pid)
     }
 
-    /// Pide detener una instancia y verifica que el proceso realmente terminó.
+    /// Pide detener una instancia y VERIFICA que el proceso terminó.
     ///
-    /// Flujo: SIGTERM (TerminateProcess en Windows), se espera hasta 10 s
-    /// comprobando la existencia del PID vía sysinfo. Si persiste, se envía
-    /// SIGKILL (taskkill /F en Windows) y se espera hasta 5 s más.
-    /// Éxito solo se reporta si el PID desapareció de la lista de procesos.
+    /// Flujo multiplataforma:
+    ///  1. Señal cortés: SIGTERM en Unix / `taskkill` sin /F en Windows.
+    ///  2. Se espera hasta 5 s usando `Child::try_wait()`, que además REAPARECER
+    ///     (reap) el hijo: sin esto quedaría un zombi en la tabla de procesos.
+    ///  3. Si sigue vivo, escalada: `Child::kill()` (SIGKILL / TerminateProcess)
+    ///     y `wait()`.
+    ///  4. Verificación final: el PID debe haber DESAPARECIDO de la lista de
+    ///     procesos del SO (sysinfo). Sólo entonces se reporta éxito.
     pub fn kill(&mut self, id: &Uuid) -> KillResult {
-        let Some(slot) = self.running.remove(id) else {
+        let Some(mut slot) = self.running.remove(id) else {
             return KillResult {
                 ok: true,
                 terminated: false,
@@ -114,7 +124,8 @@ impl Launcher {
             };
         };
 
-        let terminated = terminate_pid(slot.pid);
+        let pid = slot.pid;
+        let terminated = terminate_child(&mut slot.child, pid);
 
         KillResult {
             ok: terminated,
@@ -122,15 +133,18 @@ impl Launcher {
             error: if terminated {
                 None
             } else {
-                Some(format!("el proceso {pid} no terminó tras enviar la señal", pid = slot.pid))
+                Some(format!(
+                    "el proceso {pid} sigue en la tabla de procesos tras la señal de terminación"
+                ))
             },
         }
     }
 
-    pub fn is_running(&self, id: &Uuid) -> bool {
-        self.running
-            .get(id)
-            .is_some_and(|slot| process_exists(slot.pid))
+    pub fn is_running(&mut self, id: &Uuid) -> bool {
+        match self.running.get_mut(id) {
+            Some(slot) => matches!(slot.child.try_wait(), Ok(None)),
+            None => false,
+        }
     }
 
     pub fn running_pids(&self) -> Vec<u32> {
@@ -145,16 +159,36 @@ pub struct KillResult {
     pub error: Option<String>,
 }
 
-/// Envía señal de terminación y confirma salida del proceso.
-fn terminate_pid(pid: u32) -> bool {
-    // Primer intento: señal cortés (SIGTERM / TerminateProcess).
+/// Termina un hijo y confirma que su PID desapareció del sistema.
+/// Público para poder probarlo con un proceso real en los 3 SO.
+pub fn terminate_child(child: &mut Child, pid: u32) -> bool {
+    // 1) Señal cortés (en Windows, taskkill sin /F suele no poder con procesos
+    //    de consola; por eso la escalada es obligatoria y está cubierta).
     signal_pid(pid, false);
-    if wait_until_gone(pid, Duration::from_secs(10)) {
-        return true;
+
+    // 2) Esperar la salida con try_wait(), que REAPARECER el proceso.
+    if wait_for_exit(child, Duration::from_secs(5)) {
+        return !process_exists(pid);
     }
-    // Escalada: señal forzosa (SIGKILL / taskkill /F).
-    signal_pid(pid, true);
+
+    // 3) Escalada forzosa.
+    let _ = child.kill();
+    let _ = child.wait();
+
+    // 4) Verificación explícita: el PID ya no debe estar en la tabla de procesos.
     wait_until_gone(pid, Duration::from_secs(5))
+}
+
+fn wait_for_exit(child: &mut Child, timeout: Duration) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        match child.try_wait() {
+            Ok(Some(_status)) => return true,
+            Ok(None) => thread::sleep(Duration::from_millis(200)),
+            Err(_) => return false,
+        }
+    }
+    false
 }
 
 /// Espera a que el PID desaparezca de la tabla de procesos del SO.
@@ -170,23 +204,25 @@ fn wait_until_gone(pid: u32, timeout: Duration) -> bool {
 }
 
 /// Envía una señal al proceso por PID, de forma multiplataforma.
+/// Los errores se ignoran a propósito: la verificación real es
+/// `wait_for_exit` + `wait_until_gone` (¿sigue existiendo el proceso?).
 fn signal_pid(pid: u32, force: bool) {
-    let _ = if cfg!(windows) {
+    let pid_str = pid.to_string();
+    if cfg!(windows) {
+        let mut cmd = Command::new("taskkill");
+        cmd.args(["/PID", &pid_str, "/T"]);
         if force {
-            Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/F", "/T"])
-                .status()
-        } else {
-            Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T"])
-                .status()
+            cmd.arg("/F");
         }
+        let _ = cmd.stdout(Stdio::null()).stderr(Stdio::null()).status();
     } else {
-        let signal = if force { "KILL" } else { "TERM" };
-        Command::new("kill").args([format!("-{signal}"), &pid.to_string()]).status()
-    };
-    // Los errores se ignoran a propósito: la verificación real es
-    // wait_until_gone (¿sigue existiendo el proceso?).
+        let signal = if force { "-KILL" } else { "-TERM" };
+        let _ = Command::new("kill")
+            .args([signal, &pid_str])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 }
 
 fn classpath_string(classpath: &[PathBuf]) -> String {
@@ -196,10 +232,6 @@ fn classpath_string(classpath: &[PathBuf]) -> String {
         .map(|p| p.to_string_lossy().to_string())
         .collect::<Vec<_>>()
         .join(sep)
-}
-
-fn fs_create_dir_all(path: &Path) -> Result<()> {
-    std::fs::create_dir_all(path).map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -215,5 +247,50 @@ mod tests {
         assert!(result.ok);
         assert!(!result.terminated);
         assert!(result.error.is_none());
+    }
+
+    /// Evidencia real del criterio de éxito #6: se lanza un proceso de
+    /// larga duración, se le "mata" y se comprueba que su PID DESAPARECE
+    /// de la tabla de procesos. Se ejecuta en los 3 SO vía la matriz de CI.
+    #[test]
+    fn kill_really_terminates_process_and_pid_disappears() {
+        let mut child = if cfg!(windows) {
+            Command::new("ping")
+                .args(["-n", "60", "127.0.0.1"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("no se pudo lanzar ping")
+        } else {
+            Command::new("sleep")
+                .arg("60")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("no se pudo lanzar sleep")
+        };
+
+        let pid = child.id().expect("el proceso debe tener PID");
+        assert!(
+            process_exists(pid),
+            "el proceso recién lanzado debe existir en la tabla de procesos"
+        );
+
+        assert!(
+            terminate_child(&mut child, pid),
+            "terminate_child debe confirmar la terminación"
+        );
+        assert!(
+            !process_exists(pid),
+            "el PID {pid} debe haber DESAPARECIDO de la lista de procesos"
+        );
+    }
+
+    #[test]
+    fn classpath_separator_is_platform_correct() {
+        let paths = vec![PathBuf::from("/a/b.jar"), PathBuf::from("/c/d.jar")];
+        let s = classpath_string(&paths);
+        let expected_sep = if cfg!(windows) { ";" } else { ":" };
+        assert!(s.contains(expected_sep));
     }
 }

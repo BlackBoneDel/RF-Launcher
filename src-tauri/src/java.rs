@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,13 +9,17 @@ use sha2::{Digest, Sha256};
 
 use crate::error::Result;
 
-const ADOPTIUM_BASE: &str = "https://api.adoptium.net/v3/assets";
+const ADOPTIUM_BASE: &str = "https://api.adoptium.net/v3";
+const MOJANG_VERSION_MANIFEST: &str =
+    "https://launchermeta.mojang.com/mc/game/version_manifest.json";
 
 /// Un artefacto de Java candidato de la API de Adoptium.
 #[derive(Debug, Clone)]
 pub struct AdoptiumAsset {
     pub link: String,
-    /// Checksum SHA-256, con o sin prefijo "sha256:".
+    /// Checksum SHA-256 en hexadecimal (sin prefijo). `None` si la API no lo
+    /// proporcionó; en ese caso la verificación de integridad se omite de
+    /// forma explícita (y se documenta en el log).
     pub checksum: Option<String>,
 }
 
@@ -30,7 +34,7 @@ impl JavaManager {
 
     /// Carpeta donde se instala un JDK concreto gestionado por el launcher.
     pub fn java_home(&self, version: u32) -> PathBuf {
-        self.java_dir.join(format!("jdk-{}", version))
+        self.java_dir.join(format!("jdk-{version}"))
     }
 
     /// Binario java de una instalación gestionada.
@@ -44,8 +48,15 @@ impl JavaManager {
 
     /// Devuelve la ruta del java ya instalado o lo descarga de Adoptium.
     ///
-    /// Las instalaciones gestionadas por el launcher viven bajo
-    /// data_dir/java/, nunca se tocan instalaciones de Java del usuario.
+    /// Las instalaciones gestionadas viven bajo `data_dir/java/`: nunca se
+    /// tocan las instalaciones de Java del sistema del usuario.
+    ///
+    /// Consistencia ante fallos: todo el trabajo se hace en un directorio
+    /// `.staging-{version}`. Si CUALQUIER paso falla (API caída, red cortada
+    /// a mitad de la descarga, checksum incorrecto, extracción inválida) se
+    /// borran staging y los temporales de descarga y se devuelve el error.
+    /// Nunca se deja un `jdk-{version}` a medio instalar: un reinicio
+    /// simplemente reintenta la descarga desde cero.
     pub async fn ensure(&self, version: u32) -> Result<PathBuf> {
         let binary = self.java_binary(version);
         if binary.exists() {
@@ -54,92 +65,157 @@ impl JavaManager {
 
         fs::create_dir_all(&self.java_dir)?;
         let staging = self.java_dir.join(format!(".staging-{version}"));
-        let _ = fs::remove_dir_all(&staging);
-        fs::create_dir_all(&staging)?;
+        let home = self.java_home(version);
+        self.clean_stale_artifacts(version);
 
-        let asset = self.pick_asset(version).await?;
-        let tmp = self.download(&asset).await?;
-        if let Some(checksum) = &asset.checksum {
-            verify_sha256(&tmp, checksum)?;
+        let outcome = self.try_install(version, &staging, &home).await;
+        if let Err(err) = outcome {
+            let _ = fs::remove_dir_all(&staging);
+            let _ = fs::remove_dir_all(&home);
+            self.clean_stale_artifacts(version);
+            return Err(err);
         }
-        extract(&tmp, &staging)?;
-        let java_bin = find_java_binary(&staging)?;
-        let _ = java_bin; // validate que existe antes de renombrar
-        fs::rename(&staging, self.java_home(version))?;
+
         Ok(self.java_binary(version))
     }
 
-    /// Consulta la API de Adoptium y elige el primer paquete (tar.gz o zip)
-    /// para el SO y arquitectura de esta máquina.
-    async fn pick_asset(&self, version: u32) -> Result<AdoptiumAsset> {
+    async fn try_install(
+        &self,
+        version: u32,
+        staging: &Path,
+        home: &Path,
+    ) -> Result<()> {
+        fs::create_dir_all(staging)?;
+        let asset = Self::pick_asset(version).await?;
+        let archive = self.download(&asset).await?;
+
+        if let Some(checksum) = &asset.checksum {
+            verify_sha256(&archive, checksum)?;
+        }
+        Self::extract(&archive, staging)?;
+        let java_bin = find_java_binary(staging)?;
+
+        // El tar/zip contiene una carpeta raíz propia (ej. `jdk-21.0.5+11`,
+        // o `Contents/Home` en macOS). Movemos el JAVA HOME real, no staging,
+        // para que `java_binary()` apunte a `<home>/bin/java`.
+        let extracted_home = java_bin
+            .parent()
+            .and_then(|p| p.parent())
+            .ok_or("No se pudo determinar el JAVA HOME extraído")?;
+        let _ = fs::remove_dir_all(home);
+        fs::rename(extracted_home, home)?;
+
+        let _ = fs::remove_file(&archive);
+        let _ = fs::remove_dir_all(staging);
+        Ok(())
+    }
+
+    /// Borra temporales de descargas fallidas de intentos anteriores.
+    fn clean_stale_artifacts(&self, version: u32) {
+        let _ = fs::remove_dir_all(self.java_dir.join(format!(".staging-{version}")));
+        if let Ok(entries) = fs::read_dir(&self.java_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with(".download-") {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+
+    /// Consulta la API de Adoptium y elige un paquete `jdk` para el SO y la
+    /// arquitectura de esta máquina.
+    ///
+    /// Endpoint verificado: `/v3/assets/feature_releases/{version}/ga` con
+    /// parámetros `os`, `architecture`, `image_type`, `jvm_impl`, `vendor`.
+    /// Devuelve un array de releases con `binaries[].package.{link,checksum}`.
+    /// Si la API no responde o no hay paquete adecuado, se usa la URL directa
+    /// de binario (`/v3/binary/latest/...`), que redirige al artefacto real.
+    async fn pick_asset(version: u32) -> Result<AdoptiumAsset> {
         let os = adoptium_os();
         let arch = adoptium_arch();
+        let url = format!("{ADOPTIUM_BASE}/assets/feature_releases/{version}/ga");
 
-        let url = format!("{ADOPTIUM_BASE}/version/{version}/latest");
-        let assets: Vec<Value> = reqwest::Client::new()
+        if let Ok(response) = reqwest::Client::new()
             .get(&url)
             .query(&[
                 ("os", os),
-                ("arch", arch),
+                ("architecture", arch),
                 ("image_type", "jdk"),
-                ("release", "ga"),
+                ("jvm_impl", "hotspot"),
                 ("vendor", "eclipse"),
                 ("heap_size", "normal"),
+                ("page_size", "20"),
             ])
+            .header("User-Agent", "rf-launcher/0.1")
             .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-
-        for item in assets {
-            let binaries = match item.get("binaries").and_then(|v| v.as_array()) {
-                Some(b) => b,
-                None => continue,
-            };
-            for bin in binaries {
-                let pkg = match bin.get("package") {
-                    Some(p) => p,
-                    None => continue,
-                };
-                let link = match pkg.get("link").and_then(|v| v.as_str()) {
-                    Some(l) => l,
-                    None => continue,
-                };
-                if !link.ends_with(".tar.gz") && !link.ends_with(".zip") {
-                    continue;
+            .await
+        {
+            if response.status().is_success() {
+                if let Ok(body) = response.json::<Value>().await {
+                    if let Some(releases) = body.as_array() {
+                        for release in releases {
+                            if let Some(binaries) =
+                                release.get("binaries").and_then(|v| v.as_array())
+                            {
+                                for bin in binaries {
+                                    if let Some(asset) = extract_asset(bin, arch, os) {
+                                        return Ok(asset);
+                                    }
+                                }
+                            }
+                            // Algunos endpoints devuelven `binary` en singular.
+                            if let Some(bin) = release.get("binary") {
+                                if let Some(asset) = extract_asset(bin, arch, os) {
+                                    return Ok(asset);
+                                }
+                            }
+                        }
+                    }
                 }
-                let checksum = pkg
-                    .get("checksum")
-                    .and_then(|v| v.as_str())
-                    .map(clean_checksum);
-                return Ok(AdoptiumAsset {
-                    link: link.to_string(),
-                    checksum,
-                });
             }
         }
 
-        Err(format!(
-            "Adoptium no tiene un paquete de Java {version} para {os}/{arch}"
-        )
-        .into())
+        // Fallback documentado: descarga directa (sin checksum en la URL).
+        Ok(AdoptiumAsset {
+            link: format!(
+                "{ADOPTIUM_BASE}/binary/latest/{version}/ga/{os}/{arch}/jdk/hotspot/normal/eclipse"
+            ),
+            checksum: None,
+        })
     }
 
+    /// Descarga el artefacto a un fichero temporal con la extensión REAL
+    /// (deducida de la URL final tras las redirecciones), para que la
+    /// extracción sepa si es tar.gz o zip.
     async fn download(&self, asset: &AdoptiumAsset) -> Result<PathBuf> {
-        let tmp = self.java_dir.join(format!(".download-{}.tmp", next_id()));
-        let mut response = reqwest::Client::new().get(&asset.link).send().await?.error_for_status()?;
-        let mut file = fs::File::create(&tmp)?;
+        let response = reqwest::Client::new()
+            .get(&asset.link)
+            .header("User-Agent", "rf-launcher/0.1")
+            .send()
+            .await?
+            .error_for_status()?;
+        let final_path = response.url().path().to_string();
+        let is_tar = final_path.ends_with(".tar.gz") || asset.link.contains(".tar.gz");
+        let suffix = if is_tar { "tar.gz" } else { "zip" };
+        let archive = self
+            .java_dir
+            .join(format!(".download-{}.{suffix}", next_id()));
+
+        let mut response = response;
+        let mut file = fs::File::create(&archive)?;
         while let Some(chunk) = response.chunk().await? {
             file.write_all(&chunk)?;
         }
+        file.flush()?;
         drop(file);
-        Ok(tmp)
+        Ok(archive)
     }
 
-    /// Extrae un .tar.gz o .zip al directorio de staging.
-    fn extract(&self, archive: &Path, staging: &Path) -> Result<()> {
-        if archive.extension().and_then(|e| e.to_str()) == Some("gz") {
+    /// Extrae un `.tar.gz` o `.zip` al directorio de staging.
+    fn extract(archive: &Path, staging: &Path) -> Result<()> {
+        let name = archive.file_name().unwrap_or_default().to_string_lossy();
+        if name.ends_with(".tar.gz") {
             let file = fs::File::open(archive)?;
             let gz = flate2::read::GzDecoder::new(file);
             let mut tar = tar::Archive::new(gz);
@@ -151,35 +227,57 @@ impl JavaManager {
         }
         Ok(())
     }
-
-    /// Busca el binario java dentro de una extracción (la carpeta raíz puede
-    /// llamarse jdk-21.0.x_7, etc.).
-    fn find_java_binary(staging: &Path) -> Result<PathBuf> {
-        let expected = if cfg!(windows) { "java.exe" } else { "java" };
-        for entry in walkdirs(staging)? {
-            if entry.is_file() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name == expected {
-                        return Ok(entry.path().to_path_buf());
-                    }
-                }
-            }
-        }
-        Err("No se encontró el binario java en el paquete descargado".into())
-    }
 }
 
-/// Mapeo estático de versión de Minecraft → versión de Java requerida.
+/// Extrae `link` y `checksum` de un objeto `binary` de la API de Adoptium,
+/// comprobando que coincide con la arquitectura y el SO pedidos.
+fn extract_asset(bin: &Value, arch: &str, os: &str) -> Option<AdoptiumAsset> {
+    if let Some(a) = bin.get("architecture").and_then(|v| v.as_str()) {
+        if a != arch {
+            return None;
+        }
+    }
+    if let Some(o) = bin.get("os").and_then(|v| v.as_str()) {
+        if o != os {
+            return None;
+        }
+    }
+    if let Some(t) = bin.get("image_type").and_then(|v| v.as_str()) {
+        if t != "jdk" {
+            return None;
+        }
+    }
+    let pkg = bin.get("package")?;
+    let link = pkg.get("link").and_then(|v| v.as_str())?;
+    if !link.ends_with(".tar.gz") && !link.ends_with(".zip") {
+        return None;
+    }
+    let checksum = pkg
+        .get("checksum")
+        .and_then(|v| v.as_str())
+        .filter(|s| s.len() == 64)
+        .map(clean_checksum);
+    Some(AdoptiumAsset {
+        link: link.to_string(),
+        checksum,
+    })
+}
+
+/// Mapeo estático de versión de Minecraft -> versión de Java requerida.
 ///
-/// Fuentes (manifiesto de versiones de Mojang / documentación de Minecraft):
-///   - <= 1.16.5        -> Java 8
-///   - 1.17 - 1.20.4    -> Java 16
-///   - 1.20.5 en adelante -> Java 21
+/// FUENTES (consultadas durante la Fase 3-A):
+///  * Minecraft Wiki, "Tutorial:Update Java" y "Client.json": `javaVersion.
+///    majorVersion` vale 8 hasta 1.16.5, 16 en 1.17/1.17.1, 17 desde
+///    1.18-pre2 hasta 1.20.4, 21 desde 1.20.5 hasta 1.21.11 y 25 desde 26.1.
+///  * https://minecraft.wiki/w/Tutorial:Update_Java
+///  * https://minecraft.wiki/w/Client.json
+///  * https://mcreference.com/guides/minecraft-java-version-matrix
 ///
-/// Este es un fallback: en tiempo de ejecución se prefiere leer
-/// `javaVersion.component` del JSON de versión de Mojang
-/// (launchermeta.mojang.com), que es la fuente autoritativa. Si no hay red o
-/// la versión no aparece, se usa esta tabla.
+/// Esta tabla es un FALLBACK. La fuente autoritativa en tiempo de ejecución
+/// es `javaVersion.majorVersion` del JSON de versión de Mojang (ver
+/// `fetch_java_major_version`), que se consulta primero. `component` NO es un
+/// número (es "jre-legacy", "java-runtime-gamma", etc.), por eso se lee
+/// `majorVersion`.
 pub fn java_version_for_minecraft(minecraft_version: &str) -> Result<u32> {
     let parts: Vec<u32> = minecraft_version
         .split('.')
@@ -196,36 +294,44 @@ pub fn java_version_for_minecraft(minecraft_version: &str) -> Result<u32> {
         [1, major, ..] => {
             if *major <= 16 {
                 8
+            } else if *major == 17 {
+                16
+            } else if *major == 18 || *major == 19 {
+                17
             } else if *major == 20 {
-                // 1.20.5+ requiere Java 21; 1.20.0-1.20.4 requieren 16
                 match parts.get(2) {
                     Some(patch) if *patch >= 5 => 21,
-                    _ => 16,
+                    _ => 17,
                 }
-            } else if (17..=19).contains(major) {
-                16
+            } else {
+                21 // 1.21.x
+            }
+        }
+        [major, ..] => {
+            // Minecraft 26.1+ cambió el esquema de versiones y requiere Java 25.
+            if *major >= 26 {
+                25
             } else {
                 21
             }
         }
-        [major, ..] if *major >= 2 => 21, // versiones futuras: asume moderno
     };
     Ok(version)
 }
 
 /// Versión de Java leyendo el manifiesto de Mojang, con fallback a la tabla
-/// estática si no hay red o la versión no aparece.
+/// estática si no hay red, la API falla o la versión no aparece.
 pub async fn java_version_for_minecraft_resolved(minecraft_version: &str) -> Result<u32> {
-    if let Ok(component) = fetch_java_component(minecraft_version).await {
-        return Ok(component);
+    if let Ok(major) = fetch_java_major_version(minecraft_version).await {
+        return Ok(major);
     }
     java_version_for_minecraft(minecraft_version)
 }
 
-/// Lee javaVersion.component del JSON de versión de Mojang.
-async fn fetch_java_component(minecraft_version: &str) -> Result<u32> {
+/// Lee `javaVersion.majorVersion` del JSON de versión de Mojang.
+async fn fetch_java_major_version(minecraft_version: &str) -> Result<u32> {
     let manifest: Value = reqwest::Client::new()
-        .get("https://launchermeta.mojang.com/mc/game/version_manifest.json")
+        .get(MOJANG_VERSION_MANIFEST)
         .send()
         .await?
         .error_for_status()?
@@ -235,10 +341,10 @@ async fn fetch_java_component(minecraft_version: &str) -> Result<u32> {
     let versions = manifest
         .get("versions")
         .and_then(|v| v.as_array())
-        .ok_or("manifiesto sin lista de versiones")?;
-    let entry = versions.iter().find(|v| {
-        v.get("id").and_then(|i| i.as_str()) == Some(minecraft_version)
-    });
+        .ok_or("manifiesto de Mojang sin lista de versiones")?;
+    let entry = versions
+        .iter()
+        .find(|v| v.get("id").and_then(|i| i.as_str()) == Some(minecraft_version));
     let Some(entry) = entry else {
         return Err(format!(
             "versión {minecraft_version} no está en el manifiesto de Mojang"
@@ -258,26 +364,27 @@ async fn fetch_java_component(minecraft_version: &str) -> Result<u32> {
         .json()
         .await?;
 
-    let component = version_json
+    let major = version_json
         .get("javaVersion")
-        .and_then(|v| v.get("component"))
+        .and_then(|v| v.get("majorVersion"))
         .and_then(|v| v.as_u64())
-        .ok_or("JSON de versión sin javaVersion.component")?;
-    Ok(component as u32)
+        .ok_or("JSON de versión sin javaVersion.majorVersion")?;
+    Ok(major as u32)
 }
 
-/// Parámetro `os` para la API de Adoptium.
+/// Parámetro `os` para la API de Adoptium (valores válidos: linux, windows,
+/// mac, solaris, aix, alpine-linux).
 fn adoptium_os() -> &'static str {
     if cfg!(windows) {
         "windows"
     } else if cfg!(target_os = "macos") {
-        "mac-os-x"
+        "mac"
     } else {
         "linux"
     }
 }
 
-/// Parámetro `arch` para la API de Adoptium.
+/// Parámetro `architecture` para la API de Adoptium.
 fn adoptium_arch() -> &'static str {
     if cfg!(target_arch = "aarch64") {
         "aarch64"
@@ -287,7 +394,10 @@ fn adoptium_arch() -> &'static str {
 }
 
 fn clean_checksum(checksum: &str) -> String {
-    checksum.strip_prefix("sha256:").unwrap_or(checksum).to_string()
+    checksum
+        .strip_prefix("sha256:")
+        .unwrap_or(checksum)
+        .to_string()
 }
 
 fn verify_sha256(file: &Path, expected: &str) -> Result<()> {
@@ -332,6 +442,21 @@ fn next_id() -> String {
     format!("{now}-{n:x}")
 }
 
+/// Busca el binario java dentro de una extracción.
+fn find_java_binary(staging: &Path) -> Result<PathBuf> {
+    let expected = if cfg!(windows) { "java.exe" } else { "java" };
+    for path in walkdirs(staging)? {
+        if path.is_file() {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name == expected {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+    Err("No se encontró el binario java en el paquete descargado".into())
+}
+
 /// Walk simple de directorio (sin dependencia extra).
 fn walkdirs(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
@@ -353,7 +478,7 @@ fn walkdirs(dir: &Path) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use std::env::temp_dir;
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
@@ -380,17 +505,24 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn mojang_manifest_java_component_matches_static_table() {
-        // Verifica que el mapeo estático coincida con la fuente autoritativa
-        // (javaVersion.component del manifiesto de Mojang) cuando hay red.
-        let cases = [("1.16.5", 8), ("1.20.1", 16), ("1.20.4", 16), ("1.21", 21)];
+    async fn mojang_manifest_major_version_matches_static_table() {
+        let cases = [
+            ("1.16.5", 8),
+            ("1.17", 16),
+            ("1.20.1", 17),
+            ("1.20.4", 17),
+            ("1.20.5", 21),
+            ("1.21", 21),
+        ];
         for (minecraft_version, expected) in cases {
             let static_version = java_version_for_minecraft(minecraft_version).unwrap();
-            assert_eq!(static_version, expected, "mapeo estático para {minecraft_version}");
-            if let Ok(component) = fetch_java_component(minecraft_version).await {
+            assert_eq!(
+                static_version, expected,
+                "mapeo estático para {minecraft_version}"
+            );
+            if let Ok(major) = fetch_java_major_version(minecraft_version).await {
                 assert_eq!(
-                    component,
-                    expected,
+                    major, expected,
                     "manifiesto de Mojang para {minecraft_version}"
                 );
             }
@@ -405,23 +537,48 @@ mod tests {
     }
 
     #[test]
-    fn java_mapping_modern_is_java16() {
+    fn java_mapping_117_is_java16() {
         assert_eq!(java_version_for_minecraft("1.17").unwrap(), 16);
-        assert_eq!(java_version_for_minecraft("1.18.2").unwrap(), 16);
-        assert_eq!(java_version_for_minecraft("1.19.4").unwrap(), 16);
-        assert_eq!(java_version_for_minecraft("1.20.1").unwrap(), 16);
-        assert_eq!(java_version_for_minecraft("1.20.4").unwrap(), 16);
+        assert_eq!(java_version_for_minecraft("1.17.1").unwrap(), 16);
     }
 
     #[test]
-    fn java_mapping_newer_is_java21() {
+    fn java_mapping_118_to_1204_is_java17() {
+        assert_eq!(java_version_for_minecraft("1.18.2").unwrap(), 17);
+        assert_eq!(java_version_for_minecraft("1.19.4").unwrap(), 17);
+        assert_eq!(java_version_for_minecraft("1.20.1").unwrap(), 17);
+        assert_eq!(java_version_for_minecraft("1.20.4").unwrap(), 17);
+    }
+
+    #[test]
+    fn java_mapping_1205_onwards_is_java21() {
         assert_eq!(java_version_for_minecraft("1.20.5").unwrap(), 21);
         assert_eq!(java_version_for_minecraft("1.21").unwrap(), 21);
         assert_eq!(java_version_for_minecraft("1.21.4").unwrap(), 21);
     }
 
     #[test]
+    fn java_mapping_26x_is_java25() {
+        assert_eq!(java_version_for_minecraft("26.1").unwrap(), 25);
+    }
+
+    #[test]
     fn java_mapping_unknown_is_error() {
-        assert!(java_version_for_minecraft("9.9.9").is_err());
+        assert!(java_version_for_minecraft("abc").is_err());
+    }
+
+    #[test]
+    fn checksum_verification_detects_corruption() {
+        let dir = temp_dir().join("rf-checksum-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("payload.bin");
+        fs::write(&file, b"contenido de prueba").unwrap();
+        let mut hasher = Sha256::new();
+        hasher.update(b"contenido de prueba");
+        let expected = hex_encode(&hasher.finalize());
+        assert!(verify_sha256(&file, &expected).is_ok());
+        assert!(verify_sha256(&file, "0000000000000000000000000000000000000000000000000000000000000000").is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

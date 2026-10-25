@@ -1,8 +1,12 @@
+use serde::ser::Serializer;
 use thiserror::Error;
-use tar::TarError;
 
-/// Errores del núcleo del launcher. Todos se convierten en String para los
-/// comandos de Tauri (la frontera con el frontend no tipifica errores).
+/// Errores del núcleo del launcher.
+///
+/// Tauri 1 exige que TODO lo que devuelve un comando implemente
+/// `serde::Serialize`, incluido el tipo de error. En lugar de convertir cada
+/// error a String en cada comando, serializamos el error como una cadena
+/// legible (su mensaje `Display`).
 #[derive(Error, Debug)]
 pub enum LauncherError {
     #[error("E/S: {0}")]
@@ -13,8 +17,6 @@ pub enum LauncherError {
     Reqwest(#[from] reqwest::Error),
     #[error("ZIP: {0}")]
     Zip(#[from] zip::result::ZipError),
-    #[error("TAR: {0}")]
-    Tar(#[from] TarError),
     #[error("Instancia no encontrada: {0}")]
     InstanceNotFound(String),
     #[error("Configuración desconocida: {0}")]
@@ -34,6 +36,15 @@ pub enum LauncherError {
 impl From<&str> for LauncherError {
     fn from(s: &str) -> Self {
         LauncherError::Custom(s.to_string())
+    }
+}
+
+impl serde::Serialize for LauncherError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
     }
 }
 

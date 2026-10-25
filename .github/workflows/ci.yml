@@ -6,30 +6,36 @@ on:
 
 permissions:
   contents: read
-  checks: write
+
+defaults:
+  run:
+    # Git Bash está disponible en los tres runners (incluido windows-latest).
+    # Sin esto, `tee`, `set -o pipefail` y `2>&1 | tee` fallan en PowerShell.
+    shell: bash
 
 jobs:
   build-and-test:
     strategy:
       fail-fast: false
       matrix:
-        # Temporalmente solo ubuntu-22.04 para iterar rápido mientras se
-        # corrige el error de compilación de Rust. Restaurar la matriz de 3 OS
-        # (windows-latest, macos-latest, ubuntu-22.04) una vez verde.
-        os: [ubuntu-22.04]
+        # ubuntu-22.04 en lugar de ubuntu-latest: Tauri 1.x enlaza contra
+        # webkit2gtk-4.0, cuyo paquete de desarrollo sólo existe en Ubuntu
+        # 22.04 (en 24.04 fue sustituido por 4.1). Se documenta en el informe.
+        os: [windows-latest, macos-latest, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain (stable)
+      - name: Instalar Rust toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Rust compilation cache
+      - name: Cache de compilación Rust
         uses: Swatinem/rust-cache@v2
         with:
+          workspaces: src-tauri
           shared-key: "rf-launcher-${{ matrix.os }}"
 
-      - name: Install Node.js
+      - name: Instalar Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -39,86 +45,66 @@ jobs:
       - name: Instalar dependencias de sistema (Linux)
         if: "runner.os == 'Linux'"
         run: |
-          set -o pipefail
-          sudo apt-get update > apt.log 2>&1
-          sudo apt-get install -y libwebkit2gtk-4.0-dev > apt_packages.log 2>&1 || sudo apt-get install -y libwebkit2gtk-4.1-dev >> apt_packages.log 2>&1
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.0-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            xvfb
 
       - name: Instalar dependencias de frontend
-        run: npm ci > npm_ci.log 2>&1
+        run: npm ci
         working-directory: frontend
 
       - name: Type-check y build del frontend (Vite)
-        run: npm run build > npm_build.log 2>&1
+        run: npm run build
         working-directory: frontend
 
       - name: Build del backend Rust (release)
+        run: cargo build --release 2>&1 | tee cargo_build.log
+        working-directory: src-tauri
+
+      - name: Tests unitarios de Rust (config, instancia, RAM, mapeo Java)
         run: |
-          set -o pipefail
-          cargo build --release 2>&1 | tee cargo_build.log
+          cargo test -- --nocapture \
+            --skip ensure_java_21_downloads_from_adoptium \
+            --skip mojang_manifest_major_version_matches_static_table \
+            2>&1 | tee cargo_test.log
         working-directory: src-tauri
 
-      - name: Ejecutar tests de Rust
-        run: cargo test 2>&1 | tee cargo_test.log
-        working-directory: src-tauri
-
-      - name: Smoke test descarga real de Java 21 desde Adoptium (Linux)
+      - name: Smoke test de red (Adoptium + manifiesto de Mojang, Linux)
         if: "runner.os == 'Linux'"
-        run: cargo test ensure_java_21_downloads_from_adoptium -- --nocapture 2>&1 | tee cargo_smoke.log
+        run: |
+          cargo test ensure_java_21_downloads_from_adoptium -- --nocapture 2>&1 | tee cargo_smoke.log
+          cargo test mojang_manifest_major_version_matches_static_table -- --nocapture 2>&1 | tee -a cargo_smoke.log
         working-directory: src-tauri
 
       - name: Línea base de RAM del launcher en reposo (Linux)
         if: "runner.os == 'Linux'"
         run: |
-          sudo apt-get install -y xvfb > xvfb.log 2>&1
+          set +e
           xvfb-run -a ./target/release/rf-launcher > launcher_ram.log 2>&1 &
-          PID=$!
-          sleep 10
-          echo "=== RSS del launcher en reposo (sin instancias corriendo) ==="
-          if [ -d "/proc/$PID" ]; then grep -E 'VmRSS|VmSize|VmPeak' /proc/$PID/status || true; else echo "El proceso no está ejecutándose"; fi >> launcher_ram.log
-          kill $PID 2>/dev/null || true
-          wait $PID 2>/dev/null || true
+          sleep 12
+          LPID=$(pgrep -x rf-launcher | head -1)
+          echo "=== Launcher en reposo, sin instancias corriendo ===" | tee -a launcher_ram.log
+          if [ -n "$LPID" ]; then
+            grep -E '^(Name|VmRSS|VmSize|VmPeak|VmHWM):' "/proc/$LPID/status" | tee -a launcher_ram.log
+            ps -o pid=,rss=,vsz=,cmd= -p "$LPID" | tee -a launcher_ram.log
+            kill "$LPID"
+          else
+            echo "No se encontró el proceso rf-launcher; revisar launcher_ram.log" | tee -a launcher_ram.log
+          fi
+          cat launcher_ram.log
+        working-directory: src-tauri
 
-      - name: Diagnostico publicar cargo_build.log en un check run
+      - name: Subir logs como artefacto si algo falla
         if: failure()
-        continue-on-error: true
-        run: |
-          python3 - <<'EOF'
-          import os, sys, urllib.request, urllib.error, json
-          token = os.environ.get("GITHUB_TOKEN", "")
-          try:
-              body_log = open("src-tauri/cargo_build.log").read()
-          except Exception as e:
-              body_log = f"No se pudo leer src-tauri/cargo_build.log: {e}\n"
-          if len(body_log) > 60000:
-              body_log = body_log[:60000] + "\n... [truncado] ...\n"
-          payload = json.dumps({
-              "name": "cargo build --release",
-              "head_branch": "${{ github.ref_name }}",
-              "head_sha": "${{ github.sha }}",
-              "status": "completed",
-              "conclusion": "failure",
-              "output": {
-                  "title": "Error de compilacion de cargo build --release en ${{ matrix.os }}",
-                  "summary": "Vea output.text para el detalle del error del compilador Rust.",
-                  "text": body_log,
-              },
-          }).encode()
-          req = urllib.request.Request(
-              f"https://api.github.com/repos/BlackBoneDel/RF-Launcher/check-runs",
-              data=payload,
-              headers={"Authorization": "token " + token,
-                       "Accept": "application/vnd.github+json",
-                       "User-Agent": "rf-launcher-ci",
-                       "Content-Type": "application/json"},
-              method="POST",
-          )
-          try:
-              with urllib.request.urlopen(req, timeout=15) as resp:
-                  print("Check run creado HTTP", resp.status)
-          except urllib.error.HTTPError as e:
-              print("GitHub API HTTP", e.code, e.read().decode()[:500])
-              sys.exit(1)
-          except Exception as e:
-              print("Excepcion:", repr(e))
-              sys.exit(1)
-          EOF
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs-${{ matrix.os }}
+          path: |
+            src-tauri/cargo_build.log
+            src-tauri/cargo_test.log
+            src-tauri/cargo_smoke.log
+            src-tauri/launcher_ram.log
+          if-no-files-found: ignore
+          retention-days: 14
