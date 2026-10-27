@@ -2,6 +2,12 @@
 
 **Fecha:** 2026-10-25 (cierre reconciliado 2026-10-26) · **Rama:** `arena/2412f038-rf-launcher` · **PR:** [#3](https://github.com/BlackBoneDel/RF-Launcher/pull/3) (DRAFT) · **Corrida de referencia del código:** [40244256181](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40244256181) · **Identidad definitiva:** §13
 
+> **Actualización posterior (deuda técnica, issue #5):** el usuario ratificó
+> el criterio `>=`: **100 % o más de la RAM física se rechaza en duro** y no
+> se puede confirmar con `force`. Las secciones de este documento que hablan
+> de `>` estricto o `Warn` al 100 % son históricas. La fuente normativa
+> vigente es `README.md` junto a `src-tauri/src/ram.rs`.
+
 ---
 
 ## 1. Resumen ejecutivo
@@ -12,7 +18,7 @@ Cobertura por SO cerrada: descarga real de JDK 21 y RAM en reposo verificadas en
 Se añadieron 4 commits de código/CI (+ este informe) y 2 tests nuevos (27 → 29).
 CI del código: **verde en los 3 SO** ([40244256181](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40244256181)); corrida definitiva del cierre: ver §13.
 Decisión Tauri 1 → Tauri 2: **recomiendo migrar, pero NO se ejecutó**; queda pendiente de aprobación explícita.
-Decisión del límite de RAM al 100%: **pendiente**; no se tocó código ni test en esta auditoría.
+Decisión del límite de RAM al 100%: **pendiente en esta auditoría**; resuelta después con `>=` (ver nota de actualización y C.3).
 `ubuntu-22.04` tiene fecha de retirada **2027-04-17** — esto convierte Tauri 2 en urgente, no opcional.
 Hallazgos nuevos no pedidos: 6 (ver §12), dos de ellos bugs funcionales en el cable Rust↔TS.
 
@@ -162,6 +168,13 @@ Ambas son defendibles. **No hay fuente verificable que dirima.**
 2. **Volver a `>=`** (100% = `Exceeds`, rechazo duro) — conservador; requiere revertir el test a `ram_equal_to_physical_is_rejected` y cambiar una línea de la implementación.
 
 No lo decidiré unilateralmente. Hasta que respondas, la celda queda **documentada como criterio no ratificado**.
+
+> **Resolución posterior (issue #5):** el usuario eligió la opción 2 (`>=`).
+> El test vuelve a llamarse `ram_equal_to_physical_is_rejected`; 100 % o más
+> devuelve `Exceeds` y `force` ya no puede confirmar ese límite. La validación
+> se centralizó en `validate_ram_max` para las rutas global, por instancia y
+> de lanzamiento. Este párrafo sustituye a C.3 como estado vigente; C.1–C.3
+> se conservan como contexto de la decisión.
 
 ---
 
@@ -518,7 +531,7 @@ Tras la auditoría hay **29 tests** (27 originales + 2 nuevos marcados 🆕). Co
 | 26 | `ram_exceeds_physical_is_rejected` | ram.rs | Pedir más de la RAM física → `Exceeds` | W M L |
 | 27 | `ram_over_80_percent_warns` | ram.rs | Pedir >80% → `Warn` | W M L |
 | 28 | `ram_under_80_percent_is_ok` | ram.rs | Pedir ≤80% → `Ok` | W M L |
-| 29 | `ram_equal_to_physical_warns_but_is_not_rejected` | ram.rs | 100% → `Warn`; 100%+1 MB → `Exceeds` (**criterio pendiente, Parte C**) | W M L |
+| 29 | `ram_equal_to_physical_warns_but_is_not_rejected` (histórico; hoy `ram_equal_to_physical_is_rejected`) | ram.rs | En la auditoría: 100% → `Warn`; 100%+1 MB → `Exceeds`. **Decisión posterior:** 100% o más → `Exceeds` (Parte C) | W M L |
 
 **Conteo verificado en CI:** W `27 passed; 1 filtered` · M `27 passed; 1 filtered` · L `27 passed; 2 filtered` (+ smoke Adoptium `1 passed` y smoke Mojang `1 passed`). Total 29.
 

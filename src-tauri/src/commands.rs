@@ -84,9 +84,10 @@ pub async fn resolve_config(
 }
 
 #[tauri::command]
-/// `force` es obligatorio en el cable: sin él, el aviso >80% de RAM era un
-/// callejón sin salida (se devolvía `ok:false` pero no había forma de
-/// confirmar). Tauri 2 mantiene `force` en JS (es una sola palabra, no cambia).
+/// `force` es obligatorio en el cable: sin él, el aviso >80% y <100% de RAM
+/// era un callejón sin salida (se devolvía `ok:false` pero no había forma de
+/// confirmar). El 100% o más se rechaza en duro. Tauri 2 mantiene `force`
+/// en JS (es una sola palabra, no cambia).
 pub async fn set_global_config(
     state: State<'_, AppState>,
     key: String,
@@ -159,24 +160,36 @@ pub async fn set_instance_config(
         if requested <= 0 {
             return Err("La RAM debe ser mayor a 0 MB".into());
         }
-        if requested as u64 > total {
-            return Err(LauncherError::RamExceedsPhysical {
-                requested: requested as u64,
-                total,
+        // Criterio único (issue #5): 100% o más es `Exceeds`; `force` sólo
+        // confirma la franja >80% y <100%. Se usa `validate_ram_max` en vez de
+        // duplicar `>` para que el límite no pueda divergir entre comandos.
+        match validate_ram_max(requested as u64, total) {
+            RamValidation::Exceeds {
+                requested_mb,
+                total_mb,
+            } => {
+                return Err(LauncherError::RamExceedsPhysical {
+                    requested: requested_mb,
+                    total: total_mb,
+                }
+                .into())
             }
-            .into());
-        }
-        if !force && matches!(validate_ram_max(requested as u64, total), RamValidation::Warn { .. }) {
-            return Ok(RamCheck {
-                total_mb: total,
-                ok: false,
-                warning: Some(format!(
-                    "Se solicitan {} MB ({}% de la RAM física de {} MB). Confirma para continuar.",
-                    requested,
-                    (requested as f64) * 100.0 / (total as f64),
-                    total
-                )),
-            });
+            RamValidation::Warn {
+                requested_mb,
+                total_mb,
+            } if !force => {
+                return Ok(RamCheck {
+                    total_mb,
+                    ok: false,
+                    warning: Some(format!(
+                        "Se solicitan {} MB ({}% de la RAM física de {} MB). Confirma para continuar.",
+                        requested_mb,
+                        (requested_mb as f64) * 100.0 / (total_mb as f64),
+                        total_mb
+                    )),
+                });
+            }
+            _ => {}
         }
     }
 
@@ -239,10 +252,15 @@ pub async fn launch_instance(state: State<'_, AppState>, id: String) -> Result<L
         (rm.as_int().unwrap_or(1024) as u64, xm.as_int().unwrap_or(2048) as u64)
     };
     let total = total_ram_mb();
-    if ram_max > total {
+    // Issue #5: 100% exacto de la RAM física se rechaza en duro aquí también.
+    if let RamValidation::Exceeds {
+        requested_mb,
+        total_mb,
+    } = validate_ram_max(ram_max, total)
+    {
         return Err(LauncherError::RamExceedsPhysical {
-            requested: ram_max,
-            total,
+            requested: requested_mb,
+            total: total_mb,
         }
         .into());
     }

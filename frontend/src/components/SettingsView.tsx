@@ -56,8 +56,9 @@ export function SettingsView({ onBack }: Props) {
     setMessage(null);
     setPendingForce(null);
     try {
-      // El backend devuelve RamCheck: si ok=false y hay warning (>80% de la
-      // RAM física) NO se guardó. Hay que poder confirmarlo con force=true.
+      // El backend devuelve RamCheck: si ok=false y hay warning (>80% y <100%
+      // de la RAM física) NO se guardó. Hay que poder confirmarlo con
+      // force=true. El 100% o más se rechaza en duro y no llega aquí.
       const res = await setGlobalConfig(key, value, force);
       if (!res.ok && res.warning) {
         setPendingForce({ key, value, warning: res.warning });
@@ -171,7 +172,7 @@ export function SettingsView({ onBack }: Props) {
                 </button>
               </div>
               <p className="mt-1 text-xs text-[var(--muted)]">
-                Valor por defecto del sistema: 2048 MB. Nunca se permite más RAM de la físicamente disponible.
+                Valor por defecto del sistema: 2048 MB. 100 % o más de la RAM física se rechaza en duro.
               </p>
             </div>
             <div className="flex items-start gap-3">

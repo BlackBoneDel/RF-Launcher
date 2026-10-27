@@ -114,9 +114,11 @@ global (no en un mecanismo de persistencia paralelo).
 `sysinfo::System::new_all()` da la RAM física real del SO (mismo crate en los
 tres sistemas, verificado en la matriz de CI). Reglas:
 
-- **Error duro:** Xmx > RAM física → se rechaza.
-- **Advertencia blanda:** Xmx > 80 % de la RAM física → se avisa y se exige
-  confirmación explícita (`force=true` en `set_instance_config`).
+- **Error duro:** **100 % o más de la RAM física se rechaza en duro**
+  (`Xmx >= RAM física`); no se puede confirmar con `force`.
+- **Advertencia blanda:** Xmx > 80 % y < 100 % de la RAM física → se avisa y
+  se exige confirmación explícita (`force=true` en los comandos de
+  configuración).
 - Xms no puede superar Xmx.
 
 ## Lanzamiento y terminación

@@ -6,6 +6,12 @@
 **Estado:** Fase 3-A implementada y verificada en una matriz real de tres sistemas
 operativos (Windows / macOS / Linux).
 
+> **Actualización posterior (deuda técnica, issue #5):** el criterio **vigente**
+> de RAM es `>=`: **100 % o más de la RAM física se rechaza en duro**. Las
+> afirmaciones de este informe que describen `>` estricto o `Warn` al 100 %
+> son históricas y quedan superadas. Fuente normativa: `README.md` y
+> `src-tauri/src/ram.rs`.
+
 - **Corrida definitiva con el informe ya en el árbol (`2778620`):**
   [run 40239118850](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40239118850)
   — 3 jobs `success`. Los commits posteriores son exclusivamente de
@@ -75,7 +81,7 @@ dist/assets/index-CRf2h6et.js   243.45 kB │ gzip: 75.24 kB
 | 2 | Modelo de Instancia con UUID, nombre, versión MC, Fabric Loader opcional, `template_origin`, carpeta aislada, overrides, timestamps | `src-tauri/src/instance.rs` | tests `instance_serializes_template_origin_as_null`, `list_returns_only_valid_instance_dirs` |
 | 3 | Motor de configuración jerárquica instancia > global > default + tests de los 3 casos | `src-tauri/src/config.rs` | `resolve_instance_override_wins_over_global`, `resolve_falls_back_to_global_when_instance_does_not_override`, `resolve_falls_back_to_system_default_when_neither_defines_key` |
 | 4 | Gestión automática de Java vía Adoptium con checksum, reintentos y estado consistente | `src-tauri/src/java.rs` | smoke test real en CI: `ensure_java_21_downloads_from_adoptium` (15.60 s, descarga + SHA-256 + `java -version`) |
-| 5 | Validación de RAM contra RAM física real, error duro y warning >80 % | `src-tauri/src/ram.rs`, `frontend/src/components/InstanceCard.tsx` | `ram_detection_reads_real_physical_memory` imprime `RAM_FISICA_MB` en los 3 SO; UI con aviso y confirmación `force` |
+| 5 | Validación de RAM contra RAM física real, error duro y warning >80 % (histórico: ahora 100 % o más se rechaza en duro) | `src-tauri/src/ram.rs`, `frontend/src/components/InstanceCard.tsx` | `ram_detection_reads_real_physical_memory` imprime `RAM_FISICA_MB` en los 3 SO; UI con aviso y confirmación `force` |
 | 6 | Lanzar y matar procesos reales con terminación verificada | `src-tauri/src/launcher.rs` | `kill_really_terminates_process_and_pid_disappears ... ok` en Windows, macOS y Linux |
 | 7 | Línea base de RAM del launcher en reposo | `.github/workflows/ci.yml` | `VmRSS: 91500 kB` (ver §7) |
 | 8 | Temas claro/oscuro persistentes | `src-tauri/src/commands.rs` (`get_theme`/`set_theme`), `frontend/src/components/ThemeToggle.tsx` | tema guardado como clave `Theme` del mismo motor jerárquico |
@@ -224,10 +230,15 @@ Corridas verdes previas: `40237313439`, `40237684461`, `40238204012`.
    `serde::Serialize`, requisito de Tauri 1.
 10. **Iconos reales.** `generate_context!()` paniquea si faltan; se generaron
     PNG/ICO/ICNS válidos en `src-tauri/icons/`.
-11. **RAM: error duro >100 %, warning >80 %.** Error propio de test: se había
-    escrito un test que exigía rechazar exactamente el 100 %, contradiciendo la
-    propia especificación ("no permitir **más** RAM de la disponible"). Se
-    corrigió el test a `Warn` y se añadió el caso 32001/32000 como `Exceeds`.
+11. **RAM: error duro >100 %, warning >80 % (criterio histórico, superado).**
+    Error propio de test: se había escrito un test que exigía rechazar
+    exactamente el 100 %, contradiciendo la propia especificación ("no permitir
+    **más** RAM de la disponible"). Se corrigió el test a `Warn` y se añadió el
+    caso 32001/32000 como `Exceeds`.
+
+    > **Decisión final posterior (issue #5, ratificada por el usuario):** se
+    > revierte a `>=`. **100 % o más se rechaza en duro**; `force` sólo cubre
+    > la franja >80 % y <100 %. Ver `README.md` y `src-tauri/src/ram.rs`.
 
 ---
 

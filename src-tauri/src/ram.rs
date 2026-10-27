@@ -11,25 +11,27 @@ pub fn total_ram_mb() -> u64 {
 pub enum RamValidation {
     /// La solicitud es segura.
     Ok,
-    /// Advertencia blanda: la solicitud supera el umbral imprudente (80% de la
-    /// RAM física) pero no la supera. El usuario debe confirmar explícitamente.
+    /// Advertencia blanda: supera el umbral imprudente (80% de la RAM física)
+    /// pero sigue siendo estrictamente menor que el 100%. Se puede confirmar
+    /// explícitamente con `force`.
     Warn { requested_mb: u64, total_mb: u64 },
-    /// Error duro: se pide más RAM de la que tiene la máquina.
+    /// Error duro: se pide el 100% o más de la RAM física.
     Exceeds { requested_mb: u64, total_mb: u64 },
 }
 
 /// Umbral por encima del cual se considera la asignación imprudente.
 const RAM_WARN_THRESHOLD: f64 = 0.80;
 
-/// DECISIÓN PENDIENTE (auditoría Fase 3-A, Parte C): el límite exacto del
-/// 100% de la RAM física NO está fijado por una cita textual verificable de
-/// la spec. La implementación actual interpreta "no permitir MÁS RAM de la
-/// disponible" como `>` estricto: exactamente el 100% se PERMITE con aviso
-/// (>80%). La interpretación alternativa es `>=` (rechazar también el 100%).
-/// NO se cambia nada aquí hasta que el usuario decida; ver el informe de
-/// auditoría. Los tests cubren ambos lados del límite (99.x% / 100% / 100%+).
+/// DECISIÓN FINAL (issue #5, ratificada por el usuario): pedir exactamente el
+/// 100% de la RAM física TAMBIÉN se rechaza en duro. La comparación es `>=`,
+/// no `>`: el SO necesita memoria y un heap JVM de toda la RAM física es un
+/// fallo en tiempo de ejecución, no una imprudencia confirmable. `force` sólo
+/// puede confirmar la franja de aviso (>80% y <100%).
+///
+/// Todas las rutas que validan RAM (config global, override por instancia y
+/// lanzamiento) deben usar esta función para no divergir en el límite.
 pub fn validate_ram_max(requested_mb: u64, total_mb: u64) -> RamValidation {
-    if requested_mb > total_mb {
+    if requested_mb >= total_mb {
         RamValidation::Exceeds {
             requested_mb,
             total_mb,
@@ -93,14 +95,13 @@ mod tests {
     }
 
     #[test]
-    fn ram_equal_to_physical_warns_but_is_not_rejected() {
-        // La especificación prohíbe asignar MÁS RAM de la física; asignar
-        // exactamente el 100 % se permite pero se marca como imprudente (>80 %).
+    fn ram_equal_to_physical_is_rejected() {
+        // Criterio final ratificado: 100% exacto es `Exceeds`, no `Warn`.
         assert!(matches!(
             validate_ram_max(32000, 32000),
-            RamValidation::Warn { .. }
+            RamValidation::Exceeds { .. }
         ));
-        // Un MB por encima sí es rechazo duro.
+        // Un MB por encima también es rechazo duro.
         assert!(matches!(
             validate_ram_max(32001, 32000),
             RamValidation::Exceeds { .. }

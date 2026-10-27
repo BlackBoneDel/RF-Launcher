@@ -27,7 +27,7 @@ pub enum LauncherError {
     UnknownJavaMapping(String),
     #[error("La descarga de Java {0} falló")]
     JavaDownloadFailed(u32),
-    #[error("RAM solicitada ({requested} MB) supera la RAM física ({total} MB)")]
+    #[error("RAM solicitada ({requested} MB) alcanza o supera la RAM física ({total} MB); 100 % o más se rechaza en duro")]
     RamExceedsPhysical { requested: u64, total: u64 },
     #[error("{0}")]
     Custom(String),
