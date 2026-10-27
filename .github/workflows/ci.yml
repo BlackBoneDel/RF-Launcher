@@ -531,7 +531,7 @@ jobs:
         run: |
           set -o pipefail
           npx --yes @tauri-apps/cli@2.12.4 build \
-            --bundles ${{ matrix.mandatory_bundles }} 2>&1 | tee tauri-build.log
+            --ci --no-sign --bundles ${{ matrix.mandatory_bundles }} 2>&1 | tee tauri-build.log
 
       - name: Bundle opcional por SO (no bloqueante)
         if: matrix.optional_bundles != ''
@@ -543,7 +543,19 @@ jobs:
         run: |
           set -o pipefail
           npx --yes @tauri-apps/cli@2.12.4 build \
-            --bundles ${{ matrix.optional_bundles }} 2>&1 | tee -a tauri-build.log
+            --ci --no-sign --bundles ${{ matrix.optional_bundles }} 2>&1 | tee -a tauri-build.log
+
+      - name: Publicar log del bundle si falla
+        if: failure()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src-tauri/tauri-build.log')
+          text = p.read_text(encoding='utf-8', errors='replace') if p.exists() else '(sin tauri-build.log)'
+          enc = text[-12000:].replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print(f"::error title=tauri-build-log-${{ matrix.os }}::OS=${{ matrix.os }}%0A" + enc)
+          PY
 
       - name: Recoger instaladores, zip de .app y hashes locales
         shell: bash

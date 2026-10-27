@@ -47,8 +47,16 @@ git push origin build-v0.1.0
 ```
 
 Eso ejecuta únicamente los jobs `build-installers` y `publish-release`.
-El job `build-installers` usa `npx --yes @tauri-apps/cli@2.12.4 build` en cada
-runner con bundles explícitos:
+El job `build-installers` usa `npx --yes @tauri-apps/cli@2.12.4 build --ci --no-sign`
+en cada runner con bundles explícitos.
+
+> **Nota de layout (hallazgo real del primer intento):** `tauri-cli` ejecuta
+> `beforeBuildCommand`/`beforeDevCommand` en `dirs.frontend`, que en este repo
+> se resuelve como la raíz del proyecto, no como `src-tauri`. Por eso los hooks
+> deben ser `cd frontend && npm run ...`. El valor anterior `cd ../frontend && ...`
+> falló en los 3 runners con `sh: 1: cd: can't cd to ../frontend`. `frontendDist`
+> sigue siendo `../frontend/dist` porque esa ruta sí se resuelve relativa al
+> directorio de `tauri.conf.json`.
 
 - Windows: `nsis` obligatorio → `.exe`; `msi` se intenta como segundo bundle opcional.
 - macOS: `dmg` obligatorio → `.dmg`; si el `.app` intermedio existe, también se publica como `.zip`.
