@@ -26,7 +26,9 @@ src-tauri/
     launcher.rs      Spawn, log por lanzamiento, terminación verificada.
     state.rs         Estado compartido (AppState).
     error.rs         Errores tipados + Serialize para la frontera Tauri.
-  tauri.conf.json    Configuración en formato **Tauri 1.x**.
+  tauri.conf.json    Configuración en formato **Tauri 2.x**.
+  capabilities/      Permisos IPC de la ventana principal.
+  permissions/       Definición de los 11 comandos propios permitidos.
 .github/workflows/   CI: matriz Windows / macOS / Linux.
 ```
 
@@ -144,15 +146,16 @@ sesión. Persistir PIDs entre sesiones queda para una fase posterior.
 # Frontend (verificable localmente)
 cd frontend && npm ci && npm run build
 
-# Backend (requiere toolchain Rust + librerías de sistema de Tauri 1)
+# Backend (requiere toolchain Rust + librerías de sistema de Tauri 2)
 cd src-tauri && cargo build --release && cargo test
 ```
 
 El workflow `.github/workflows/ci.yml` ejecuta la matriz
-`windows-latest` / `macos-latest` / `ubuntu-22.04` con build del frontend,
+`windows-latest` / `macos-latest` / `ubuntu-24.04` con build del frontend,
 `cargo build --release`, `cargo test`, un smoke test de descarga real de Java 21
-desde Adoptium (Linux) y la medición de la línea base de RAM en reposo.
+desde Adoptium en los 3 SO, smoke estricto de arranque de la app en los 3 SO y
+la medición de la línea base de RAM en reposo.
 
-> Nota sobre `ubuntu-22.04`: Tauri 1.x enlaza `webkit2gtk-4.0`, disponible en
-> Ubuntu 22.04 pero sustituido por 4.1 en Ubuntu 24.04 (`ubuntu-latest` en
-> 2026). El job de Linux usa 22.04 para poder verificar de verdad el build.
+> **Runner Linux fijo:** Tauri 2 requiere `libwebkit2gtk-4.1-dev`, disponible en
+> Ubuntu 24.04. Se usa la etiqueta inmóvil `ubuntu-24.04`, no `ubuntu-latest`,
+> porque esta última puede pasar a Ubuntu 26.04 sin previo aviso en el workflow.

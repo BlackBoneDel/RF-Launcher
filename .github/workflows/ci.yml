@@ -28,11 +28,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # ubuntu-22.04 en lugar de ubuntu-latest: Tauri 1.x enlaza contra
-        # webkit2gtk-4.0, sustituido por 4.1 en Ubuntu 24.04. La deprecación
-        # de ubuntu-22.04 empezó 2026-09-17 y su retirada es 2027-04-17
-        # (actions/runner-images#14254): ver Memo de Decisión Tauri 1 vs 2.
-        os: [windows-latest, macos-latest, ubuntu-22.04]
+        # ubuntu-24.04 fijo (no ubuntu-latest): Tauri 2 enlaza contra
+        # webkit2gtk-4.1. La etiqueta ubuntu-latest es móvil y puede pasar a
+        # Ubuntu 26.04; no se ha verificado allí el paquete 4.1.
+        os: [windows-latest, macos-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -71,7 +70,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.0-dev build-essential curl wget file \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
             xvfb
 
@@ -286,6 +285,38 @@ jobs:
           Get-Content ram_baseline.txt
         working-directory: src-tauri
 
+      # Smoke ESTRICTO de arranque de Tauri 2: reutiliza el lanzamiento real de
+      # las tres plataformas hecho para medir RAM, pero convierte un bloqueo o
+      # una salida inmediata en fallo del job. No es una medición tolerante.
+      - name: Smoke test estricto de arranque Tauri 2 (3 SO)
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          out=src-tauri/startup_smoke.txt
+          base=src-tauri/ram_baseline.txt
+          log=src-tauri/launcher_ram.log
+          : > "$out"
+          echo "SMOKE_STARTUP_OS=$RUNNER_OS" | tee -a "$out"
+          if [ ! -f "$base" ]; then
+            echo "SMOKE_STARTUP_STATUS=FAILED (sin ram_baseline.txt)" | tee -a "$out"
+            exit 1
+          fi
+          cat "$base" | tee -a "$out"
+          if ! grep -qx 'RAM_IDLE_STATUS=OK' "$base"; then
+            echo "SMOKE_STARTUP_STATUS=FAILED (la app no se mantuvo viva)" | tee -a "$out"
+            echo "--- launcher_ram.log ---" | tee -a "$out"
+            tail -c 2000 "$log" 2>/dev/null | tee -a "$out"
+            exit 1
+          fi
+          if grep -Eiq 'panicked at|Error al ejecutar RF Launcher|thread .*panicked' "$log"; then
+            echo "SMOKE_STARTUP_STATUS=FAILED (error runtime en launcher_ram.log)" | tee -a "$out"
+            tail -c 2000 "$log" | tee -a "$out"
+            exit 1
+          fi
+          echo "SMOKE_STARTUP_STATUS=OK" | tee -a "$out"
+          echo "SMOKE_STARTUP_NOTE=Proceso principal vivo y sin panico/_error fatal en el log" | tee -a "$out"
+
       # Los logs/artefactos de GitHub redirigen a un blob host que no siempre es
       # alcanzable. Las anotaciones SÍ se leen por API, así que publicamos aquí
       # los números que el informe necesita como evidencia verificable.
@@ -332,6 +363,14 @@ jobs:
           p = "src-tauri/launcher_ram.log"
           if os.path.exists(p):
               notice("evidence-ram-log", open(p, errors="replace").read()[-1800:])
+          p = "src-tauri/startup_smoke.txt"
+          if os.path.exists(p):
+              body = open(p, errors="replace").read()
+              notice("evidence-startup-smoke", body)
+              if "SMOKE_STARTUP_STATUS=OK" not in body:
+                  print("::warning title=startup-smoke::Arranque de Tauri 2 NO verificado; ver evidence-startup-smoke")
+          else:
+              notice("evidence-startup-smoke", "SMOKE_STARTUP_STATUS=BLOCKED (sin startup_smoke.txt)")
           EOF
 
       - name: Publicar salida de cargo como anotaciones legibles vía API
@@ -378,6 +417,7 @@ jobs:
             src-tauri/cargo_smoke.log
             src-tauri/cargo_smoke_mojang.log
             src-tauri/launcher_ram.log
+            src-tauri/startup_smoke.txt
             src-tauri/ram_baseline.txt
             src-tauri/adoptium_probe.log
             src-tauri/adoptium_probe.json

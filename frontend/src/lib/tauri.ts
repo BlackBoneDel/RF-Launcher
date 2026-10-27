@@ -1,11 +1,11 @@
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import type { ConfigKey, ConfigValue, Instance, KillResult, LaunchResult, RamCheck } from '../types';
 
 /**
- * Tauri 1 convierte los argumentos snake_case de Rust a camelCase en JS
- * (v1.tauri.app/v1/guides/features/command/#passing-arguments). Todas las
+ * Tauri 2 conserva los argumentos snake_case de Rust como camelCase en JS
+ * (v2.tauri.app/develop/calling-rust/#passing-arguments). Todas las
  * claves de los objetos de argumentos de este archivo DEBEN ser camelCase.
- * Las respuestas, en cambio, llegan con los nombres de campo de serde.
+ * Las respuestas llegan con los nombres de campo definidos por serde.
  */
 export async function getTheme(): Promise<string> {
   return invoke('get_theme');

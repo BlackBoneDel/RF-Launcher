@@ -3,7 +3,7 @@ use thiserror::Error;
 
 /// Errores del núcleo del launcher.
 ///
-/// Tauri 1 exige que TODO lo que devuelve un comando implemente
+/// Tauri 2 exige que TODO lo que devuelve un comando implemente
 /// `serde::Serialize`, incluido el tipo de error. En lugar de convertir cada
 /// error a String en cada comando, serializamos el error como una cadena
 /// legible (su mensaje `Display`).

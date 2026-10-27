@@ -12,7 +12,7 @@ export type ConfigKey = 'RamMinMb' | 'RamMaxMb' | 'JavaAutoDownload' | 'Theme';
  *  - RESPUESTAS (Rust -> TS): serde usa los nombres de los campos Rust.
  *    Casi todos son snake_case; `templateOrigin` es camelCase porque el plan
  *    de Fase 3-A lo fijó así y el mod lo consumirá como plantilla.
- *  - ARGUMENTOS (TS -> Rust): Tauri 1 convierte los parámetros snake_case de
+ *  - ARGUMENTOS (TS -> Rust): Tauri 2 convierte los parámetros snake_case de
  *    Rust a camelCase en JS. Por eso en `lib/tauri.ts` se usa `instanceId`,
  *    `minecraftVersion`, `fabricLoader`. Ver Parte F del informe de auditoría.
  */

@@ -86,8 +86,7 @@ pub async fn resolve_config(
 #[tauri::command]
 /// `force` es obligatorio en el cable: sin él, el aviso >80% de RAM era un
 /// callejón sin salida (se devolvía `ok:false` pero no había forma de
-/// confirmar). Tauri 1 convierte este parámetro a `force` en JS (es una sola
-/// palabra, no cambia).
+/// confirmar). Tauri 2 mantiene `force` en JS (es una sola palabra, no cambia).
 pub async fn set_global_config(
     state: State<'_, AppState>,
     key: String,
