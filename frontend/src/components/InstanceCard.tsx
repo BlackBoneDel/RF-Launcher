@@ -51,9 +51,9 @@ export function InstanceCard({ instance, onStatusChange }: Props) {
       setEffective({ min: intOf(min), max: intOf(max) });
     } catch {
       // Sin backend (vista previa en navegador): se muestran los overrides locales.
-      setEffective({ min: instance.ram_min_mb, max: instance.ram_max_mb });
+      setEffective({ min: instance.ramMinMb, max: instance.ramMaxMb });
     }
-  }, [instance.id, instance.ram_min_mb, instance.ram_max_mb]);
+  }, [instance.id, instance.ramMinMb, instance.ramMaxMb]);
 
   useEffect(() => {
     if (showConfig) void loadEffective();
@@ -131,13 +131,13 @@ export function InstanceCard({ instance, onStatusChange }: Props) {
       <div className="flex flex-col gap-1 min-w-0">
         <h3 className="font-semibold text-[var(--fg)] truncate">{instance.name}</h3>
         <p className="text-xs text-[var(--muted)] truncate">
-          Minecraft {instance.minecraft_version}
-          {instance.fabric_loader ? ` · Fabric Loader ${instance.fabric_loader}` : ' · vanilla'}
+          Minecraft {instance.minecraftVersion}
+          {instance.fabricLoader ? ` · Fabric Loader ${instance.fabricLoader}` : ' · vanilla'}
           {instance.templateOrigin ? ` · plantilla: ${instance.templateOrigin}` : ''}
         </p>
         <div className="mt-1.5 flex items-center gap-2 text-xs text-[var(--muted)]">
           <span>RAM máx.:</span>
-          <span className="font-mono text-[var(--fg)]">{ramLabel(instance.ram_max_mb)}</span>
+          <span className="font-mono text-[var(--fg)]">{ramLabel(instance.ramMaxMb)}</span>
         </div>
       </div>
 

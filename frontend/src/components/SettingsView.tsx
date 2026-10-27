@@ -38,7 +38,7 @@ export function SettingsView({ onBack }: Props) {
     } catch {}
     try {
       const sys = await getSystemRam();
-      setTotalRam(sys.total_mb ?? null);
+      setTotalRam(sys.totalMb ?? null);
     } catch {}
   }, []);
 

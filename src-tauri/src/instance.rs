@@ -14,41 +14,55 @@ use crate::error::{LauncherError, Result};
 /// El identificador (UUID) es inmutable y es la clave de referencia; el nombre
 /// visible puede cambiar sin romper nada. `template_origin` existe para fases
 /// futuras (plantillas preconfiguradas, ej. "rf-client-default"); en esta fase
-/// siempre se persiste como null. En el cable JSON el campo se llama
-/// `templateOrigin` (camelCase), no `template_origin`: ver el atributo serde
-/// y el test de regresión `template_origin_wire_field_is_exactly_...`.
+/// siempre se persiste como null.
+///
+/// CONVENCIÓN IPC (issue #6): todos los campos serializados usan camelCase.
+/// Cada campo que antes salía en snake_case conserva un `alias` para poder
+/// leer `instance.json` escritos por versiones anteriores sin migración.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Instance {
     pub id: Uuid,
     pub name: String,
+    #[serde(alias = "minecraft_version")]
     pub minecraft_version: String,
+    #[serde(alias = "fabric_loader")]
     pub fabric_loader: Option<String>,
-    /// Nombre de la plantilla de origen. En el cable Rust -> TypeScript se
-    /// llama EXACTAMENTE `templateOrigin` (el plan original de Fase 3-A lo
-    /// especificaba en camelCase). `alias` permite leer sin migración los
-    /// `instance.json` escritos antes de esta corrección.
-    #[serde(rename = "templateOrigin", alias = "template_origin")]
+    /// Nombre de la plantilla de origen: en el cable es `templateOrigin`.
+    #[serde(alias = "template_origin")]
     pub template_origin: Option<String>,
     /// Overrides de configuración específicos de esta instancia (ej. RAM).
     /// Las claves viven en config::ConfigKey, serializadas como strings.
+    #[serde(alias = "config_overrides")]
     pub config_overrides: HashMap<String, ConfigValue>,
+    #[serde(alias = "ram_min_mb")]
     pub ram_min_mb: Option<u64>,
+    #[serde(alias = "ram_max_mb")]
     pub ram_max_mb: Option<u64>,
+    #[serde(alias = "created_at")]
     pub created_at: u64,
+    #[serde(alias = "last_launched_at")]
     pub last_launched_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InstanceSummary {
     pub id: String,
     pub name: String,
+    #[serde(alias = "minecraft_version")]
     pub minecraft_version: String,
+    #[serde(alias = "fabric_loader")]
     pub fabric_loader: Option<String>,
-    #[serde(rename = "templateOrigin", alias = "template_origin")]
+    #[serde(alias = "template_origin")]
     pub template_origin: Option<String>,
+    #[serde(alias = "ram_min_mb")]
     pub ram_min_mb: Option<u64>,
+    #[serde(alias = "ram_max_mb")]
     pub ram_max_mb: Option<u64>,
+    #[serde(alias = "created_at")]
     pub created_at: u64,
+    #[serde(alias = "last_launched_at")]
     pub last_launched_at: Option<u64>,
 }
 
@@ -195,8 +209,10 @@ mod tests {
 
         assert_eq!(parsed["templateOrigin"], serde_json::Value::Null);
         assert_eq!(parsed["id"], inst.id.to_string());
-        assert_eq!(parsed["minecraft_version"], "1.20.1");
-        assert_eq!(parsed["fabric_loader"], serde_json::Value::Null);
+        assert_eq!(parsed["minecraftVersion"], "1.20.1");
+        assert_eq!(parsed["fabricLoader"], serde_json::Value::Null);
+        assert_eq!(parsed["configOverrides"], serde_json::json!({}));
+        assert!(parsed.as_object().unwrap().keys().all(|k| !k.contains('_')));
 
         // Recarga desde disco y comprueba que template_origin sigue siendo None
         let reloaded = Instance::load(&dir, &inst.id).unwrap();
@@ -242,6 +258,115 @@ mod tests {
         legacy.insert("template_origin".into(), serde_json::json!("legacy"));
         let back: Instance = serde_json::from_value(serde_json::Value::Object(legacy)).unwrap();
         assert_eq!(back.template_origin.as_deref(), Some("legacy"));
+    }
+
+    #[test]
+    fn instance_wire_fields_are_camel_case_and_legacy_aliases_work() {
+        let id = Uuid::new_v4();
+        let mut overrides = HashMap::new();
+        overrides.insert("RamMaxMb".to_string(), ConfigValue::Int(4096));
+        let inst = Instance {
+            id,
+            name: "wire".into(),
+            minecraft_version: "1.20.1".into(),
+            fabric_loader: Some("0.14.9".into()),
+            template_origin: Some("plantilla".into()),
+            config_overrides: overrides,
+            ram_min_mb: Some(1024),
+            ram_max_mb: Some(4096),
+            created_at: 10,
+            last_launched_at: Some(20),
+        };
+
+        let obj = serde_json::to_value(&inst).unwrap();
+        let keys: Vec<&str> = obj.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(obj["minecraftVersion"], "1.20.1");
+        assert_eq!(obj["fabricLoader"], "0.14.9");
+        assert_eq!(obj["templateOrigin"], "plantilla");
+        assert_eq!(obj["configOverrides"]["RamMaxMb"]["kind"], "Int");
+        assert_eq!(obj["ramMinMb"], 1024);
+        assert_eq!(obj["ramMaxMb"], 4096);
+        assert_eq!(obj["createdAt"], 10);
+        assert_eq!(obj["lastLaunchedAt"], 20);
+        assert!(
+            keys.iter().all(|k| !k.contains('_')),
+            "ninguna clave del cable puede ser snake_case: {keys:?}"
+        );
+
+        let legacy = serde_json::json!({
+            "id": id.to_string(),
+            "name": "legacy",
+            "minecraft_version": "1.16.5",
+            "fabric_loader": "0.13.3",
+            "template_origin": "legacy-template",
+            "config_overrides": {"RamMaxMb": {"kind": "Int", "value": 8192}},
+            "ram_min_mb": 512,
+            "ram_max_mb": 8192,
+            "created_at": 1,
+            "last_launched_at": 2
+        });
+        let back: Instance = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.minecraft_version, "1.16.5");
+        assert_eq!(back.fabric_loader.as_deref(), Some("0.13.3"));
+        assert_eq!(back.template_origin.as_deref(), Some("legacy-template"));
+        assert_eq!(
+            back.config_overrides.get("RamMaxMb"),
+            Some(&ConfigValue::Int(8192))
+        );
+        assert_eq!(back.ram_min_mb, Some(512));
+        assert_eq!(back.ram_max_mb, Some(8192));
+        assert_eq!(back.created_at, 1);
+        assert_eq!(back.last_launched_at, Some(2));
+    }
+
+    #[test]
+    fn instance_summary_wire_fields_are_camel_case_and_legacy_aliases_work() {
+        let inst = Instance {
+            id: Uuid::new_v4(),
+            name: "summary".into(),
+            minecraft_version: "1.21".into(),
+            fabric_loader: None,
+            template_origin: Some("plantilla".into()),
+            config_overrides: HashMap::new(),
+            ram_min_mb: Some(1024),
+            ram_max_mb: Some(2048),
+            created_at: 3,
+            last_launched_at: None,
+        };
+
+        let obj = serde_json::to_value(inst.summary()).unwrap();
+        let keys: Vec<&str> = obj.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(obj["minecraftVersion"], "1.21");
+        assert_eq!(obj["fabricLoader"], serde_json::Value::Null);
+        assert_eq!(obj["templateOrigin"], "plantilla");
+        assert_eq!(obj["ramMinMb"], 1024);
+        assert_eq!(obj["ramMaxMb"], 2048);
+        assert_eq!(obj["createdAt"], 3);
+        assert_eq!(obj["lastLaunchedAt"], serde_json::Value::Null);
+        assert!(
+            keys.iter().all(|k| !k.contains('_')),
+            "ninguna clave del cable puede ser snake_case: {keys:?}"
+        );
+
+        let legacy = serde_json::json!({
+            "id": inst.id.to_string(),
+            "name": "legacy-summary",
+            "minecraft_version": "1.20.4",
+            "fabric_loader": "0.15.0",
+            "template_origin": "legacy-template",
+            "ram_min_mb": 256,
+            "ram_max_mb": 1024,
+            "created_at": 4,
+            "last_launched_at": 5
+        });
+        let back: InstanceSummary = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.minecraft_version, "1.20.4");
+        assert_eq!(back.fabric_loader.as_deref(), Some("0.15.0"));
+        assert_eq!(back.template_origin.as_deref(), Some("legacy-template"));
+        assert_eq!(back.ram_min_mb, Some(256));
+        assert_eq!(back.ram_max_mb, Some(1024));
+        assert_eq!(back.created_at, 4);
+        assert_eq!(back.last_launched_at, Some(5));
     }
 
     #[test]

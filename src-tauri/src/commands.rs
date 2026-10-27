@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 use uuid::Uuid;
 
@@ -12,8 +12,10 @@ use crate::ram::{total_ram_mb, validate_ram_max, RamValidation};
 use crate::state::AppState;
 
 /// Comprobación de RAM devuelta al frontend tras escribir una configuración.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RamCheck {
+    #[serde(alias = "total_mb")]
     pub total_mb: u64,
     pub ok: bool,
     pub warning: Option<String>,
@@ -323,11 +325,66 @@ pub async fn kill_instance(state: State<'_, AppState>, id: String) -> Result<Kil
 }
 
 /// Resultado de lanzar una instancia.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LaunchResult {
     pub ok: bool,
     pub pid: Option<u32>,
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::{LaunchResult, RamCheck};
+
+    #[test]
+    fn ram_check_wire_fields_are_camel_case_and_legacy_alias_works() {
+        let check = RamCheck {
+            total_mb: 16378,
+            ok: false,
+            warning: Some("Aviso".into()),
+        };
+        let obj = serde_json::to_value(&check).unwrap();
+        let keys: Vec<&str> = obj.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(obj["totalMb"], 16378);
+        assert_eq!(obj["ok"], false);
+        assert_eq!(obj["warning"], "Aviso");
+        assert!(!obj.as_object().unwrap().contains_key("total_mb"));
+        assert!(keys.iter().all(|k| !k.contains('_')), "claves: {keys:?}");
+
+        let legacy = serde_json::json!({
+            "total_mb": 8192,
+            "ok": true,
+            "warning": null
+        });
+        let back: RamCheck = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.total_mb, 8192);
+        assert!(back.ok);
+        assert_eq!(back.warning, None);
+    }
+
+    #[test]
+    fn launch_result_wire_fields_are_camel_case() {
+        let result = LaunchResult {
+            ok: true,
+            pid: Some(4242),
+            error: None,
+        };
+        let obj = serde_json::to_value(&result).unwrap();
+        let keys: Vec<&str> = obj.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(obj["ok"], true);
+        assert_eq!(obj["pid"], 4242);
+        assert_eq!(obj["error"], serde_json::Value::Null);
+        assert!(
+            keys.iter().all(|k| !k.contains('_')),
+            "ningún campo snake_case en LaunchResult: {keys:?}"
+        );
+
+        let back: LaunchResult = serde_json::from_value(obj).unwrap();
+        assert!(back.ok);
+        assert_eq!(back.pid, Some(4242));
+        assert_eq!(back.error, None);
+    }
 }
 
 

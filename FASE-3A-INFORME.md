@@ -6,10 +6,13 @@
 **Estado:** Fase 3-A implementada y verificada en una matriz real de tres sistemas
 operativos (Windows / macOS / Linux).
 
-> **Actualización posterior (deuda técnica, issue #5):** el criterio **vigente**
-> de RAM es `>=`: **100 % o más de la RAM física se rechaza en duro**. Las
-> afirmaciones de este informe que describen `>` estricto o `Warn` al 100 %
-> son históricas y quedan superadas. Fuente normativa: `README.md` y
+> **Actualización posterior (deuda técnica, issues #4, #5 y #6):** este informe
+> describe el estado histórico de Fase 3-A. Después se migró a Tauri 2 con
+> runner `ubuntu-24.04`, se unificó el cable IPC a camelCase con aliases
+> legacy y el criterio **vigente** de RAM es `>=`: **100 % o más de la RAM
+> física se rechaza en duro**. Las afirmaciones que describen Tauri 1, el
+> cable mixto o `Warn` al 100 % quedan superadas. Fuentes normativas:
+> `README.md`, `src-tauri/tauri.conf.json`, `frontend/src/types.ts` y
 > `src-tauri/src/ram.rs`.
 
 - **Corrida definitiva con el informe ya en el árbol (`2778620`):**

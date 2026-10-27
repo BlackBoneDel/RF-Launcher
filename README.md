@@ -6,8 +6,9 @@ Gestiona **instancias estándar** (Minecraft vanilla + Fabric Loader opcional), 
 modelo de Prism Launcher / MultiMC. No distribuye versiones parcheadas de Minecraft.
 
 > **Fase 3-A — Núcleo de gestión de instancias.** Sin instalación de mods (3-B),
-> sin sistema de cuentas (3-C), sin plantillas predefinidas. `template_origin`
-> existe en el modelo de datos y se persiste, pero no se usa todavía.
+> sin sistema de cuentas (3-C), sin plantillas predefinidas. `templateOrigin`
+> (campo Rust `template_origin`) existe en el modelo de datos y se persiste,
+> pero no se usa todavía.
 
 ## Arquitectura
 
@@ -29,6 +30,7 @@ src-tauri/
   tauri.conf.json    Configuración en formato **Tauri 2.x**.
   capabilities/      Permisos IPC de la ventana principal.
   permissions/       Definición de los 11 comandos propios permitidos.
+scripts/             Guardia estática del cable IPC camelCase.
 .github/workflows/   CI: matriz Windows / macOS / Linux.
 ```
 
@@ -62,7 +64,14 @@ data/
 ```
 
 El identificador es un **UUID inmutable**: el nombre visible puede cambiar sin
-romper referencias. `template_origin` se serializa como `null` en esta fase.
+romper referencias. `templateOrigin` se serializa como `null` en esta fase.
+
+**Convención del cable y del disco:** las cinco structs IPC (`Instance`,
+`InstanceSummary`, `RamCheck`, `LaunchResult`, `KillResult`) serializan todos
+sus campos en camelCase. Los `instance.json` nuevos también usan camelCase;
+cada campo antes snake_case conserva un `#[serde(alias = "...")]` para leer
+ficheros escritos por versiones anteriores sin migración. La guardia
+`scripts/check_ipc_camel_case.py` se ejecuta en los 3 jobs de CI.
 
 ## Motor de configuración jerárquica
 

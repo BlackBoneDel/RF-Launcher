@@ -49,6 +49,12 @@ jobs:
           fi
           echo "OK: ci.yml es el unico workflow; el resultado SI representa la matriz."
 
+      - name: Guardia del cable IPC camelCase (Rust ↔ TS)
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 scripts/check_ipc_camel_case.py 2>&1 | tee ipc_wire_check.log
+
       - name: Instalar Rust toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
 
@@ -360,6 +366,11 @@ jobs:
           else:
               notice("evidence-ram-idle", "RAM_IDLE_STATUS=BLOCKED (sin fichero ram_baseline.txt)")
               print("::warning title=ram-baseline-blocked::No existe ram_baseline.txt en este SO")
+          p = "ipc_wire_check.log"
+          if os.path.exists(p):
+              notice("evidence-ipc-wire", open(p, errors="replace").read())
+          else:
+              notice("evidence-ipc-wire", "IPC_WIRE_STATUS=BLOCKED (sin ipc_wire_check.log)")
           p = "src-tauri/launcher_ram.log"
           if os.path.exists(p):
               notice("evidence-ram-log", open(p, errors="replace").read()[-1800:])
@@ -379,8 +390,9 @@ jobs:
         run: |
           python3 - <<'EOF'
           import os, re
-          paths = ["src-tauri/cargo_build.log", "src-tauri/cargo_test.log",
-                   "src-tauri/cargo_smoke.log", "src-tauri/cargo_smoke_mojang.log"]
+          paths = ["ipc_wire_check.log", "src-tauri/cargo_build.log",
+                   "src-tauri/cargo_test.log", "src-tauri/cargo_smoke.log",
+                   "src-tauri/cargo_smoke_mojang.log"]
           blocks = []
           tail = ""
           for p in paths:
@@ -412,6 +424,7 @@ jobs:
         with:
           name: ci-logs-${{ matrix.os }}
           path: |
+            ipc_wire_check.log
             src-tauri/cargo_build.log
             src-tauri/cargo_test.log
             src-tauri/cargo_smoke.log
