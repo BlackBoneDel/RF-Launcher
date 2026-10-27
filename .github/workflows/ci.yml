@@ -170,6 +170,28 @@ jobs:
           cargo test mojang_manifest_major_version_matches_static_table -- --nocapture 2>&1 | tee cargo_smoke_mojang.log
         working-directory: src-tauri
 
+      # Paso TEMPORAL: publica el Cargo.lock que el propio cargo generó en CI.
+      # Se retira en el commit final, cuando el lockfile ya esté versionado.
+      - name: Publicar Cargo.lock generado por CI (temporal)
+        if: "runner.os == 'Linux'"
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          from pathlib import Path
+
+          raw = Path('src-tauri/Cargo.lock').read_bytes()
+          encoded = base64.b64encode(raw).decode('ascii')
+          chunk_size = 20000
+          total = (len(encoded) + chunk_size - 1) // chunk_size
+          digest = hashlib.sha256(raw).hexdigest()
+          print(f"::notice title=cargo-lock-meta::SHA256={digest};BYTES={len(raw)};B64_LEN={len(encoded)};TOTAL={total}")
+          for index in range(total):
+              chunk = encoded[index * chunk_size:(index + 1) * chunk_size]
+              print(f"::notice title=cargo-lock-chunk::{index}|{total}|{chunk}")
+          PY
+
       # ---------------- Línea base de RAM en reposo, los 3 SO ----------------
       # Cada SO escribe el MISMO fichero clave=valor: src-tauri/ram_baseline.txt
       - name: Línea base de RAM en reposo (Linux)
