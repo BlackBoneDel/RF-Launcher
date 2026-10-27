@@ -23,6 +23,17 @@ STRUCTS = {
     "KillResult": "src-tauri/src/launcher.rs",
 }
 TS_TYPES = ROOT / "frontend" / "src" / "types.ts"
+NON_PERSISTED_STRUCTS = {"LaunchResult", "KillResult"}
+PERSISTENCE_MODULES = [
+    "instance.rs",
+    "config.rs",
+    "java.rs",
+    "minecraft.rs",
+    "state.rs",
+]
+DISK_WRITE_MARKERS = re.compile(
+    r"fs::write|serde_json::to_string|to_string_pretty|File::create|write_all"
+)
 
 
 def camel_case(name: str) -> str:
@@ -101,6 +112,22 @@ def main() -> int:
     if serde_snake:
         errors.append(f"serde: atributos con nombre snake_case {serde_snake}")
 
+    # LaunchResult y KillResult son estructuras sólo-IPC. Deben seguir sin
+    # aparecer en módulos de persistencia ni en líneas que escriben a disco.
+    non_persisted_disk_refs: list[str] = []
+    for name in NON_PERSISTED_STRUCTS:
+        for path in (ROOT / "src-tauri" / "src").glob("*.rs"):
+            text = path.read_text(encoding="utf-8")
+            for line_number, line in enumerate(text.splitlines(), 1):
+                if name in line and DISK_WRITE_MARKERS.search(line):
+                    non_persisted_disk_refs.append(f"{path.name}:{line_number}:{name}")
+        for module in PERSISTENCE_MODULES:
+            text = (ROOT / "src-tauri" / "src" / module).read_text(encoding="utf-8")
+            if name in text:
+                non_persisted_disk_refs.append(f"{module}:{name}")
+    if non_persisted_disk_refs:
+        errors.append(f"structs sólo-IPC referenciadas en persistencia: {non_persisted_disk_refs}")
+
     snake_wire_keys = sorted(k for k in wire_keys if "_" in k)
     print(f"IPC_STRUCTS_CHECKED={len(STRUCTS)}")
     print("IPC_STRUCTS=" + ",".join(STRUCTS))
@@ -110,6 +137,9 @@ def main() -> int:
     print(f"IPC_WIRE_SNAKE_CASE_KEYS={len(snake_wire_keys)}")
     print(f"TS_SNAKE_CASE_PROPERTIES={len(ts_snake)}")
     print(f"SERDE_SNAKE_CASE_RENAMES={len(serde_snake)}")
+    print(f"NON_PERSISTED_IPC_STRUCTS={len(NON_PERSISTED_STRUCTS)}")
+    print("NON_PERSISTED_IPC_STRUCTS=" + ",".join(sorted(NON_PERSISTED_STRUCTS)))
+    print(f"NON_PERSISTED_DISK_REFS={len(non_persisted_disk_refs)}")
     if errors:
         print("IPC_WIRE_STATUS=FAILED")
         for error in errors:

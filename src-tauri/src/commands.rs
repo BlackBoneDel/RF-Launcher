@@ -21,6 +21,47 @@ pub struct RamCheck {
     pub warning: Option<String>,
 }
 
+/// Decisión pura y compartida por los tres call-sites que validan RAM:
+/// `set_global_config`, `set_instance_config` y `launch_instance`.
+///
+/// `force` se recibe explícitamente para dejar claro —y poder probarlo— que
+/// NUNCA puede confirmar el 100% o más de la RAM física. Las advertencias de
+/// la franja >80% y <100% se construyen con el closure que facilita cada
+/// comando, conservando el mensaje original de la UI.
+enum RamConfigDecision {
+    Accept,
+    Warn(RamCheck),
+}
+
+fn decide_ram_config<F>(
+    requested_mb: u64,
+    total_mb: u64,
+    force: bool,
+    warning: F,
+) -> Result<RamConfigDecision>
+where
+    F: FnOnce(u64, u64) -> String,
+{
+    match validate_ram_max(requested_mb, total_mb) {
+        RamValidation::Exceeds {
+            requested_mb,
+            total_mb,
+        } => Err(LauncherError::RamExceedsPhysical {
+            requested: requested_mb,
+            total: total_mb,
+        }),
+        RamValidation::Warn {
+            requested_mb,
+            total_mb,
+        } if !force => Ok(RamConfigDecision::Warn(RamCheck {
+            total_mb,
+            ok: false,
+            warning: Some(warning(requested_mb, total_mb)),
+        })),
+        _ => Ok(RamConfigDecision::Accept),
+    }
+}
+
 #[tauri::command]
 pub async fn get_theme(state: State<'_, AppState>) -> Result<String> {
     let inner = state.inner.lock().map_err(|e| LauncherError::Custom(e.to_string()))?;
@@ -107,31 +148,20 @@ pub async fn set_global_config(
             return Err("La RAM debe ser mayor a 0 MB".into());
         }
         let total = total_ram_mb();
-        match validate_ram_max(requested as u64, total) {
-            RamValidation::Exceeds { requested_mb, total_mb } => {
-                return Err(LauncherError::RamExceedsPhysical {
-                    requested: requested_mb,
-                    total: total_mb,
-                }
-                .into())
-            }
-            RamValidation::Warn { requested_mb, total_mb } => {
-                // Sin confirmación explícita se devuelve el aviso y NO se
-                // guarda. Con `force=true` se guarda igual que en la ruta por
-                // instancia (`set_instance_config`), para que el aviso sea
-                // realmente confirmable y no un mensaje muerto.
-                if !force {
-                    return Ok(RamCheck {
-                        total_mb,
-                        ok: false,
-                        warning: Some(format!(
-                            "Se solicitan {requested_mb} MB ({}% de la RAM física de {total_mb} MB). ¿Confirmar?",
-                            (requested_mb as f64) * 100.0 / (total_mb as f64)
-                        )),
-                    });
-                }
-            }
-            RamValidation::Ok => {}
+        // Decisión compartida: 100% o más es error duro incluso con `force`.
+        match decide_ram_config(
+            requested as u64,
+            total,
+            force,
+            |requested_mb, total_mb| {
+                format!(
+                    "Se solicitan {requested_mb} MB ({}% de la RAM física de {total_mb} MB). ¿Confirmar?",
+                    (requested_mb as f64) * 100.0 / (total_mb as f64)
+                )
+            },
+        )? {
+            RamConfigDecision::Warn(check) => return Ok(check),
+            RamConfigDecision::Accept => {}
         }
     }
 
@@ -162,36 +192,24 @@ pub async fn set_instance_config(
         if requested <= 0 {
             return Err("La RAM debe ser mayor a 0 MB".into());
         }
-        // Criterio único (issue #5): 100% o más es `Exceeds`; `force` sólo
-        // confirma la franja >80% y <100%. Se usa `validate_ram_max` en vez de
-        // duplicar `>` para que el límite no pueda divergir entre comandos.
-        match validate_ram_max(requested as u64, total) {
-            RamValidation::Exceeds {
-                requested_mb,
-                total_mb,
-            } => {
-                return Err(LauncherError::RamExceedsPhysical {
-                    requested: requested_mb,
-                    total: total_mb,
-                }
-                .into())
-            }
-            RamValidation::Warn {
-                requested_mb,
-                total_mb,
-            } if !force => {
-                return Ok(RamCheck {
-                    total_mb,
-                    ok: false,
-                    warning: Some(format!(
-                        "Se solicitan {} MB ({}% de la RAM física de {} MB). Confirma para continuar.",
-                        requested_mb,
-                        (requested_mb as f64) * 100.0 / (total_mb as f64),
-                        total_mb
-                    )),
-                });
-            }
-            _ => {}
+        // Regresión de la ruta alternativa: antes este call-site sólo miraba
+        // `Warn` y un 100% exacto (`Exceeds`) caía hasta `instance.save()`.
+        // Ahora delega en la misma decisión que los otros dos call-sites.
+        match decide_ram_config(
+            requested as u64,
+            total,
+            force,
+            |requested_mb, total_mb| {
+                format!(
+                    "Se solicitan {} MB ({}% de la RAM física de {} MB). Confirma para continuar.",
+                    requested_mb,
+                    (requested_mb as f64) * 100.0 / (total_mb as f64),
+                    total_mb
+                )
+            },
+        )? {
+            RamConfigDecision::Warn(check) => return Ok(check),
+            RamConfigDecision::Accept => {}
         }
     }
 
@@ -254,18 +272,9 @@ pub async fn launch_instance(state: State<'_, AppState>, id: String) -> Result<L
         (rm.as_int().unwrap_or(1024) as u64, xm.as_int().unwrap_or(2048) as u64)
     };
     let total = total_ram_mb();
-    // Issue #5: 100% exacto de la RAM física se rechaza en duro aquí también.
-    if let RamValidation::Exceeds {
-        requested_mb,
-        total_mb,
-    } = validate_ram_max(ram_max, total)
-    {
-        return Err(LauncherError::RamExceedsPhysical {
-            requested: requested_mb,
-            total: total_mb,
-        }
-        .into());
-    }
+    // En el lanzamiento las advertencias ya fueron confirmadas al guardar,
+    // así que `force=true`; aun así, 100% o más sigue siendo error duro.
+    let _ = decide_ram_config(ram_max, total, true, |_, _| String::new())?;
     if ram_min > ram_max {
         return Err("La RAM mínima no puede superar la RAM máxima".into());
     }
@@ -325,6 +334,10 @@ pub async fn kill_instance(state: State<'_, AppState>, id: String) -> Result<Kil
 }
 
 /// Resultado de lanzar una instancia.
+///
+/// SÓLO IPC: se devuelve al frontend y nunca se serializa a un archivo, caché
+/// o log. Sus claves son palabras simples (`ok`, `pid`, `error`), por lo que
+/// nunca existió una versión legacy snake_case y no necesita `alias`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchResult {
@@ -388,3 +401,81 @@ mod wire_tests {
 }
 
 
+
+#[cfg(test)]
+mod ram_call_site_tests {
+    use super::*;
+
+    /// Cubre la ruta alternativa que motivó el hallazgo. Si `validate_ram_max`
+    /// vuelve a `>`, o si `force` vuelve a poder confirmar el 100%, este test
+    /// falla. También comprueba que la franja de aviso sigue intacta.
+    #[test]
+    fn set_instance_config_path_rejects_100_percent_even_with_force() {
+        let total = 32000u64;
+        for requested in [total, total + 1] {
+            for force in [false, true] {
+                let decision = decide_ram_config(requested, total, force, |_, _| String::new());
+                assert!(
+                    matches!(decision, Err(LauncherError::RamExceedsPhysical { .. })),
+                    "requested={requested} total={total} force={force} debe rechazarse en duro"
+                );
+            }
+        }
+
+        let warning = decide_ram_config(26000, total, false, |_, _| String::new()).unwrap();
+        assert!(matches!(warning, RamConfigDecision::Warn(_)));
+        let confirmed = decide_ram_config(26000, total, true, |_, _| String::new()).unwrap();
+        assert!(matches!(confirmed, RamConfigDecision::Accept));
+    }
+
+    /// Fija que los TRES call-sites delegan en `decide_ram_config`. Si alguien
+    /// reintroduce la comparación duplicada `> total` en `set_instance_config`
+    /// o en `launch_instance`, este test falla aunque el validador puro siga
+    /// bien. Es una guardia estática deliberada sobre este mismo fichero.
+    #[test]
+    fn every_ram_call_site_delegates_to_shared_decision() {
+        let source = include_str!("commands.rs");
+        // Sólo inspeccionamos la parte de producción: los propios literales de
+        // este test no deben hacer falsos positivos en la guardia estática.
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+        let sections = [
+            (
+                "set_global_config",
+                "pub async fn set_global_config(",
+                "pub async fn set_instance_config(",
+            ),
+            (
+                "set_instance_config",
+                "pub async fn set_instance_config(",
+                "pub async fn get_system_ram(",
+            ),
+            (
+                "launch_instance",
+                "pub async fn launch_instance(",
+                "pub async fn kill_instance(",
+            ),
+        ];
+
+        for (name, start_marker, end_marker) in sections {
+            let start = production
+                .find(start_marker)
+                .unwrap_or_else(|| panic!("no se encontró {name}"));
+            let tail = &production[start..];
+            let end = tail.find(end_marker).unwrap_or(tail.len());
+            let section = &tail[..end];
+            assert!(
+                section.contains("decide_ram_config"),
+                "{name} debe delegar en la decisión compartida de RAM"
+            );
+        }
+
+        assert!(
+            !production.contains("requested as u64 > total"),
+            "comparación duplicada reintroducida en un comando de configuración"
+        );
+        assert!(
+            !production.contains("ram_max > total"),
+            "comparación duplicada reintroducida en launch_instance"
+        );
+    }
+}

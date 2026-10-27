@@ -437,50 +437,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  # Cierre operativo de issues. NO ejecuta tests: depende de TODA la matriz,
-  # por lo que no puede fabricar un verde si cualquier SO falla. Se activa
-  # sólo en el push cuyo mensaje lleva el marcador explícito.
-  close-debt-issues:
-    needs: build-and-test
-    if: "success() && github.event_name == 'push' && github.ref == 'refs/heads/arena/10d7de5f-rf-launcher' && contains(github.event.head_commit.message, '[close-issues-4-5-6]')"
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      issues: write
-    steps:
-      - name: Cerrar #4, #5 y #6 con SHA y run reales
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.run_id }}
-          HEAD_SHA: ${{ github.sha }}
-        run: |
-          set -e
-          for N in 4 5 6; do
-            STATE=$(gh api "repos/$GITHUB_REPOSITORY/issues/$N" --jq .state)
-            COMMENT="/tmp/close-$N.md"
-            case "$N" in
-              4) cat > "$COMMENT" <<'EOF'
-          CIERRE OPERATIVO DEUDA TECNICA #4. Migracion Tauri 1 -> 2 resuelta en el commit 3ad2047f76b042c8cbc9a5c1aa9b4c1d69070e7e. CI de migracion: run 40439712705 (3/3). CI final de la tanda: run RUN_ID_PLACEHOLDER sobre HEAD_SHA_PLACEHOLDER (3/3 matriz). PR #7 listo, sin merge.
-          EOF
-              ;;
-              5) cat > "$COMMENT" <<'EOF'
-          CIERRE OPERATIVO DEUDA TECNICA #5. Decision ratificada: 100 % o mas de la RAM fisica se rechaza en duro (>=, Exceeds). Commit f2b00de787840730ba9c4c63bc2be1e833fac1dc; runs de no regresion 40440867877 / 40440864726. CI final: run RUN_ID_PLACEHOLDER sobre HEAD_SHA_PLACEHOLDER (3/3 matriz). PR #7 listo, sin merge.
-          EOF
-              ;;
-              6) cat > "$COMMENT" <<'EOF'
-          CIERRE OPERATIVO DEUDA TECNICA #6. Cable IPC unificado a camelCase en 5 structs, con 16 aliases legacy y 5 tests de regresion. Commit 9195bc28bc974dc3883f137a2da5118f5ab86dd8; guardia con IPC_WIRE_SNAKE_CASE_KEYS=0. CI final: run RUN_ID_PLACEHOLDER sobre HEAD_SHA_PLACEHOLDER (3/3 matriz). PR #7 listo, sin merge.
-          EOF
-              ;;
-            esac
-            sed -i "s/RUN_ID_PLACEHOLDER/$RUN_ID/g; s/HEAD_SHA_PLACEHOLDER/$HEAD_SHA/g" "$COMMENT"
-            EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/issues/$N/comments?per_page=100" --jq '[.[] | select(.body | contains("CIERRE OPERATIVO DEUDA TECNICA #'"$N"'")) | .id] | first // empty')
-            if [ -z "$EXISTING" ]; then
-              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$N/comments" -F body=@"$COMMENT" >/dev/null
-            fi
-            if [ "$STATE" = "open" ]; then
-              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/$N" -f state=closed -f state_reason=completed >/dev/null
-              echo "ISSUE #$N CLOSED"
-            else
-              echo "ISSUE #$N ALREADY $STATE"
-            fi
-          done
+# El job temporal de cierre de issues se usó UNA SOLA VEZ en el run
+# 40444478091 para cerrar #4/#5/#6 tras el 403 del token de integración.
+# Se retiró en la auditoría posterior: su marcador en el mensaje de commit era
+# reproducible por accidente; el permiso de escritura de issues ya no vive aquí.

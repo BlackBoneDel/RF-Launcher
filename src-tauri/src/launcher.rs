@@ -151,6 +151,11 @@ impl Launcher {
     }
 }
 
+/// Resultado de detener una instancia.
+///
+/// SÓLO IPC: se devuelve al frontend y nunca se persiste en disco, caché o
+/// log. Sus claves son palabras simples (`ok`, `terminated`, `error`), por lo
+/// que no hay ficheros legacy snake_case y no necesita `alias`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KillResult {
