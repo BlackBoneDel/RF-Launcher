@@ -110,7 +110,9 @@ Los identificadores Rust como `minecraft_version` siguen existiendo en el códig
 
 ## 4. Cierre de issues
 
-Los issues #4, #5 y #6 se cierran manualmente después de la CI final, citando los commits reales de cada tarea y el PR #7. Este archivo no contiene palabras de cierre automático ni congela el SHA que lo crea; la identidad final queda en la descripción del PR, en `git notes` y en los comentarios de cierre.
+Los issues #4, #5 y #6 se cierran después de la CI final, citando los commits reales de cada tarea y el PR #7. Este archivo no contiene palabras de cierre automático ni congela el SHA que lo crea; la identidad final queda en la descripción del PR, en `git notes` y en los comentarios de cierre.
+
+**Incidencia operativa documentada:** el `GH_TOKEN` de la integración local puede leer issues pero recibe `HTTP 403 Resource not accessible by integration` al intentar cerrarlos o comentarlos, tanto por REST como por GraphQL. Para no pedir una acción manual del usuario ni hacer un merge no autorizado, el cierre se ejecuta en el job `close-debt-issues` del propio `ci.yml`, con el `GITHUB_TOKEN` de Actions y permiso explícito `issues: write`. Ese job depende de `build-and-test` (toda la matriz), sólo corre en `push` y exige el marcador `[close-issues-4-5-6]` en el mensaje del commit. No puede convertir una matriz roja en verde porque se salta si algún job falla. Los comentarios de cierre generan el SHA y el run ID con variables del propio evento, sin congelar literales dentro del commit.
 
 ## 5. Hallazgos nuevos reportados, no corregidos en silencio
 
