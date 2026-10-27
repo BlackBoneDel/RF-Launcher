@@ -1,16 +1,16 @@
 # Auditoría y cierre de Fase 3-A — RF Launcher
 
-**Fecha:** 2026-10-25 · **Rama:** `arena/2412f038-rf-launcher` · **PR:** [#3](https://github.com/BlackBoneDel/RF-Launcher/pull/3) (DRAFT) · **Corrida de referencia:** [40244256181](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40244256181)
+**Fecha:** 2026-10-25 (cierre reconciliado 2026-10-26) · **Rama:** `arena/2412f038-rf-launcher` · **PR:** [#3](https://github.com/BlackBoneDel/RF-Launcher/pull/3) (DRAFT) · **Corrida de referencia del código:** [40244256181](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40244256181) · **Identidad definitiva:** §13
 
 ---
 
 ## 1. Resumen ejecutivo
 
-PR #3 creada en **draft**; HEAD `2e0ca8a`; sin conflictos con `main` (`MERGEABLE`). No se ha hecho merge.
+PR #3 creada en **draft**; HEAD definitivo: ver §13 (comando `git rev-parse HEAD`); sin conflictos con `main` (`MERGEABLE`). No se ha hecho merge.
 De las 9 partes: **5 limpias** (A, D, F, H, I), **3 con hallazgos pero cerradas** (B, E, G) y **1 abierta a decisión** (C).
 Cobertura por SO cerrada: descarga real de JDK 21 y RAM en reposo verificadas en Windows, macOS y Linux.
 Se añadieron 4 commits de código/CI (+ este informe) y 2 tests nuevos (27 → 29).
-CI final: **verde en los 3 SO** ([40244256181](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40244256181)).
+CI del código: **verde en los 3 SO** ([40244256181](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40244256181)); corrida definitiva del cierre: ver §13.
 Decisión Tauri 1 → Tauri 2: **recomiendo migrar, pero NO se ejecutó**; queda pendiente de aprobación explícita.
 Decisión del límite de RAM al 100%: **pendiente**; no se tocó código ni test en esta auditoría.
 `ubuntu-22.04` tiene fecha de retirada **2027-04-17** — esto convierte Tauri 2 en urgente, no opcional.
@@ -28,7 +28,8 @@ Hallazgos nuevos no pedidos: 6 (ver §12), dos de ellos bugs funcionales en el c
 | PR | **#3**, `OPEN`, `isDraft: true`, `mergeable: MERGEABLE` | `gh pr view 3 --json ...` |
 | Base | `main` @ `097662d8f13cb3af6ebc7530bc3227c384d0ec26` | `gh api ...default_branch` + `git merge-base` |
 | HEAD antes de la auditoría | `9c007e3111820c983487d6730410f357f0d24986` (**no** `30c3d01`) | `git rev-parse HEAD` |
-| HEAD al cierre del código | `2e0ca8a4c96510ae64028dd2094c7a11bb4c2991` | `git rev-parse HEAD` |
+| Último commit que modificó código (dato histórico, **no** es el HEAD actual) | `2e0ca8a4c96510ae64028dd2094c7a11bb4c2991` | `git show --stat 2e0ca8a` |
+| HEAD definitivo al cierre | ver §13 — se lee con `git rev-parse HEAD`, no se incrusta como literal (§13.1) | `git rev-parse HEAD` |
 | Conflictos con `main` | **Ninguno** | `git merge-tree --write-tree origin/main HEAD` → un único tree, sin salida de conflicto; `mergeable: MERGEABLE` |
 | Commits en la rama | 35 (31 antes + 4 de auditoría) | `git rev-list --count HEAD` |
 | Working tree | limpio | `git status --short` |
@@ -198,7 +199,55 @@ jobs:
     fi
 ```
 
-**Verificación:** en la corrida final `40244256181`, el paso `Guardia contra workflows de diagnóstico sin matriz` aparece `success` en los **3 jobs**. Cualquier workflow extra añadido en el futuro **falla el CI** en lugar de producir un check-run verde engañoso. No se conservó el workflow de diagnóstico: su única utilidad era comprobar permisos de Actions y ya cumplió su función.
+**Verificación (estado limpio):** en la corrida `40244256181`, el paso `Guardia contra workflows de diagnóstico sin matriz` aparece `success` en los **3 jobs**. Eso solo demostraba que no se rompe cuando no hay nada que atrapar. La prueba adversarial siguiente demuestra que **sí muerde**.
+
+### D.2 — Prueba adversarial real (cierre definitivo)
+
+Se ejercitó la guardia introduciendo un workflow falso real, no simulado. **Mordió a la primera, en un solo ciclo; no hizo falta corregir la guardia.**
+
+| Fase | Commit | Run ID real | Resultado observado |
+|---|---|---|---|
+| **Antes** (limpio) | `19e5d481656323951c2ee61a519a464420151120` | [40245245306](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40245245306) (push) / [40245249019](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40245249019) (PR) | `success`. Guardia `success` en Windows, macOS y Ubuntu. |
+| **Durante** (provocado) | `6fb0a2a6f9d9649def14e93102fca12539a92650` | [40426527089](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40426527089) (push) y [40426532412](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40426532412) (PR) | `failure` en la matriz. Paso 3 `Guardia contra workflows de diagnóstico sin matriz` = `failure` en los **3 jobs** (ids `121933571353` macOS, `121933571528` Ubuntu, `121933571562` Windows). |
+| **Durante** (falso verde) | mismo `6fb0a2a` | [40426527246](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40426527246) | `success` del workflow `Fake diagnostic (adversarial test)` con un job `hello`: reproduce exactamente el escenario de falso verde que la guardia debe evitar. |
+| **Después** (limpio de nuevo) | `2fafc0ea6f56b5b059f5eaacb07a1ae10dd3027d` | [40427304350](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40427304350) (push) | `completed success` en los 3 SO; guardia `success` en los 3 jobs. Tras retirar el fichero, el verde vuelve. |
+
+**Fichero usado (commit temporal `6fb0a2a`, 13 líneas, borrado en `2fafc0e`):**
+
+```yaml
+name: Fake diagnostic (adversarial test)
+on:
+  push:
+    branches: [arena/2412f038-rf-launcher]
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "hello from adversarial test"
+```
+
+**Salida cruda del paso fallido.** Los logs de job redirigen a un host de blobs inaccesible desde el sandbox
+(`curl: (35) OpenSSL SSL_connect: SSL_ERROR_SYSCALL in connection to productionresultssa2.blob.core.windows.net:443`, `HTTP=302 SIZE=0`),
+así que la evidencia cruda se leyó por la API de anotaciones
+`gh api repos/BlackBoneDel/RF-Launcher/check-runs/<JOB_ID>/annotations?per_page=100`.
+El comando de workflow `::error` emitido por el paso quedó registrado así, **idéntico en los 3 jobs**:
+
+```
+annotation_level: failure
+title: diagnostic-workflow
+message: Workflow ajeno a la matriz real detectado: fake-diagnostic.yml. Un workflow de diagnóstico produce falsos verdes.
+```
+
+Es decir, la línea completa que emitió el paso fue:
+
+```
+::error title=diagnostic-workflow::Workflow ajeno a la matriz real detectado: fake-diagnostic.yml. Un workflow de diagnóstico produce falsos verdes.
+```
+
+**Limpieza:** `git rm .github/workflows/fake-diagnostic.yml` en `2fafc0e`. `git ls-files .github/workflows/`
+devuelve únicamente `.github/workflows/ci.yml`. El fichero falso **no existe en el árbol final**; sus dos
+commits (alta y baja) quedan en el historial lineal como evidencia permanente de esta prueba, que es
+precisamente lo que esta sección documenta. No se creó ninguna rama auxiliar.
 
 ---
 
@@ -509,17 +558,56 @@ Además, dos limitaciones de medición ya consignadas en §6/E.3 y §6/E.4: el �
 
 ---
 
-## 13. Estado final
+## 13. Estado final (reconciliación definitiva del cierre)
+
+### 13.1 — Única fuente de verdad
+
+| SHA final de HEAD | Run CI final | Commits añadidos por la auditoría completa (incluido este cierre) |
+|---|---|---|
+| Salida de `git rev-parse HEAD`, idéntica a `gh pr view 3 --json headRefOid`. **Literal congelado fuera de git**: descripción de la PR #3 y `git notes show HEAD`. | Última corrida `success` de `CI Matriz RF Launcher 3 SO (verificación real)` sobre ese SHA, leída con `gh run list --branch arena/2412f038-rf-launcher --limit 5 --json databaseId,headSha,conclusion,status`. **Literal congelado en los mismos sitios.** | **9** — `git rev-list --count 9c007e3..HEAD` |
+
+**Por qué el SHA y el run no se incrustan como literales dentro de este fichero:** un fichero no
+puede contener el SHA del commit que lo contiene. Escribir el literal "final" crea un nuevo commit
+que invalida ese literal, y la corrida CI de ese nuevo commit tampoco existe todavía. Ésa es la
+**causa raíz exacta** de las tres cifras anteriores. La solución es que la fuente de verdad sea el
+**comando**, y que el valor literal se congele en un soporte que no cree commits: la descripción de
+la PR #3 (`gh pr edit --body`) y una nota git (`git notes show HEAD`, ref `refs/notes/commits`).
+Chat, PR, nota y `git rev-parse HEAD` devuelven por tanto el mismo valor.
+
+**Corrida de verificación del árbol de código definitivo (literal estable, verificada en este ciclo):**
+[40427304350](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40427304350) — `completed success`,
+3/3 jobs, guardia anti-diagnóstico `success` en los 3. Verificó el tree de código que el commit de
+cierre conserva sin cambios (`git diff --stat 2fafc0e..HEAD -- ':!AUDITORIA-FASE-3A.md'` = vacío).
+
+### 13.2 — Causa raíz de la discrepancia anterior (confirmada con `git show --stat`)
+
+Las tres cifras no fueron un error de transcripción: fueron **tres capturas tomadas en tres momentos
+distintos de un bucle de realimentación**, y el informe se editó a sí mismo dos veces.
+
+| Commit | `git show --stat` | Qué decía §13 en ese momento | Cuándo se tomó la captura |
+|---|---|---|---|
+| `2e0ca8a` | `ci.yml` (2 líneas) + `java.rs` (60 líneas) | — | Último commit con cambios de **código**. Se reportó como "SHA resultante (código)". |
+| `74688d7` | `AUDITORIA-FASE-3A.md` — **1 fichero, 532 inserciones** | "SHA resultante (código) = `2e0ca8a…`"; "SHA con este informe = **se añade en el commit final**"; commits = **5**; CI = `40244256181` | El informe se **escribió y commiteó aquí**. Ya nació desactualizado: no podía conocer su propio SHA y citaba una corrida anterior. |
+| `19e5d48` | `AUDITORIA-FASE-3A.md` — **1 fichero, 3 inserciones / 3 borrados** | "SHA final = `74688d78…`"; commits = **5–6** (un rango, reconociendo que faltaba un commit); CI = `40244978287` | Se editó §13 para **poner el SHA del commit anterior**. Ese mismo commit invalidó el SHA que acababa de escribir. |
+| — (chat de cierre) | ningún commit | `19e5d48`, run `40245245306`, **6** commits | Se reportó el HEAD real en el chat, **sin volver a actualizar el artefacto**. |
+| `6fb0a2a` + `2fafc0e` | alta y baja de `fake-diagnostic.yml` (13 líneas cada uno) | §13 sin tocar | Prueba adversarial de la Parte D (§5/D.2). |
+
+**Causa raíz concreta:** no fue "commits de documentación" en abstracto — fue que **un commit
+(`19e5d48`) modificó el propio informe después de haberlo dado por cerrado**, congelando dentro del
+documento el SHA de su padre; y que el mensaje de chat usó un tercer valor posterior sin repatriarlo
+al fichero. Se confirma con `git show 19e5d48 --stat`: 3 inserciones y 3 borrados, todos sobre
+`AUDITORIA-FASE-3A.md`. El rango "5–6" era además una predicción de un commit futuro, no una cifra.
+
+### 13.3 — Resto del estado (verificado en este ciclo)
 
 | Ítem | Valor |
 |---|---|
-| SHA resultante (código) | `2e0ca8a4c96510ae64028dd2094c7a11bb4c2991` |
-| SHA final (con este informe) | `74688d78bda8d20d0e31b61e477eb389f307bf0f` — commits posteriores son exclusivamente de documentación; `git diff --stat 2e0ca8a..HEAD -- ':!AUDITORIA-FASE-3A.md'` = vacío |
-| Commits añadidos por la auditoría | **5–6** (`2d6c1df`, `e4b96d1`, `d412964`, `2e0ca8a`, informe `74688d7` + posible commit de esta línea) |
 | PR | [#3](https://github.com/BlackBoneDel/RF-Launcher/pull/3) — **OPEN / DRAFT / MERGEABLE**, sin merge |
-| CI tras todos los cambios | **VERDE en los 3 SO** — código: [40244256181](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40244256181); con el informe incluido: [40244978287](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40244978287). Windows ✅, macOS ✅, Ubuntu ✅; guardia anti-diagnóstico ✅ en los 3 |
-| Tests | 29 (27 por job + 2 smoke en Linux), 0 fallos |
+| CI | **VERDE en los 3 SO** en la corrida de cierre (§13.1); guardia anti-diagnóstico ejercitada y verificada (§5/D.2) |
+| Tests | **29** en el código (`python3` sobre `src-tauri/src/*.rs`), 27 `passed` por job + 2 smoke en Linux, 0 fallos — recontado en las anotaciones de `40427304350` |
 | Cobertura Parte E | 6/6 celdas verificadas con evidencia; 0 bloqueadas |
+| Workflow falso | **Eliminado**. `git ls-files .github/workflows/` = `ci.yml` únicamente |
+| Commits totales alcanzables | 40 (`git rev-list --count HEAD`, clon shallow con raíz `097662d` grafted). Las cifras "35 commits" de §A.3/§G.2 y el `git log --graph` de §8 son **instantáneas del ciclo anterior**, no datos del HEAD actual |
 | Bloqueado esperando decisión del usuario | **Sí, 3 cosas:** (1) migración Tauri 1→2 (Parte B), (2) criterio del 100% de RAM (Parte C), (3) unificación camelCase del cable (N-6) |
 | Bloqueos técnicos sin resolver | Ninguno que impida la revisión; sí hay trabajo futuro documentado (árbol de procesos Windows completo, medición estadística de RAM, end-to-end de Minecraft) |
 
