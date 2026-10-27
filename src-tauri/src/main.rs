@@ -21,12 +21,13 @@ use crate::state::{AppState, Inner};
 fn main() {
     tauri::Builder::default()
         .setup(|app| -> std::result::Result<(), Box<dyn std::error::Error>> {
-            // Tauri 1 exige que el closure devuelva Result<(), Box<dyn Error>>.
+            // Tauri 2 conserva `Result<(), Box<dyn Error>>` en setup, pero
+            // `path_resolver()` se sustituye por `Manager::path()`.
             // Se usa `expect` en el interior para no tener que convertir cada
             // error concreto a ese tipo.
             let handle = app.handle();
             let data_dir = handle
-                .path_resolver()
+                .path()
                 .app_data_dir()
                 .expect("No se pudo resolver el directorio de datos de la aplicación");
 

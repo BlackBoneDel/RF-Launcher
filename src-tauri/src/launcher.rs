@@ -151,7 +151,13 @@ impl Launcher {
     }
 }
 
+/// Resultado de detener una instancia.
+///
+/// SÓLO IPC: se devuelve al frontend y nunca se persiste en disco, caché o
+/// log. Sus claves son palabras simples (`ok`, `terminated`, `error`), por lo
+/// que no hay ficheros legacy snake_case y no necesita `alias`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct KillResult {
     pub ok: bool,
     pub terminated: bool,
@@ -246,6 +252,29 @@ mod tests {
         assert!(result.ok);
         assert!(!result.terminated);
         assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn kill_result_wire_fields_are_camel_case() {
+        let result = KillResult {
+            ok: true,
+            terminated: true,
+            error: None,
+        };
+        let obj = serde_json::to_value(&result).unwrap();
+        let keys: Vec<&str> = obj.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(obj["ok"], true);
+        assert_eq!(obj["terminated"], true);
+        assert_eq!(obj["error"], serde_json::Value::Null);
+        assert!(
+            keys.iter().all(|k| !k.contains('_')),
+            "ningún campo snake_case en KillResult: {keys:?}"
+        );
+
+        let back: KillResult = serde_json::from_value(obj).unwrap();
+        assert!(back.ok);
+        assert!(back.terminated);
+        assert_eq!(back.error, None);
     }
 
     /// Ramificación HIJO del test de kill (Parte H de la auditoría): en vez

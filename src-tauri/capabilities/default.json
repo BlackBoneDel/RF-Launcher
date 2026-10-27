@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Ventana principal: IPC base de Tauri 2 y los 11 comandos propios de RF Launcher.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "allow-get-theme",
+    "allow-set-theme",
+    "allow-list-instances",
+    "allow-get-instance",
+    "allow-create-instance",
+    "allow-resolve-config",
+    "allow-set-global-config",
+    "allow-set-instance-config",
+    "allow-get-system-ram",
+    "allow-launch-instance",
+    "allow-kill-instance"
+  ]
+}

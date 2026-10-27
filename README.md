@@ -6,8 +6,9 @@ Gestiona **instancias estándar** (Minecraft vanilla + Fabric Loader opcional), 
 modelo de Prism Launcher / MultiMC. No distribuye versiones parcheadas de Minecraft.
 
 > **Fase 3-A — Núcleo de gestión de instancias.** Sin instalación de mods (3-B),
-> sin sistema de cuentas (3-C), sin plantillas predefinidas. `template_origin`
-> existe en el modelo de datos y se persiste, pero no se usa todavía.
+> sin sistema de cuentas (3-C), sin plantillas predefinidas. `templateOrigin`
+> (campo Rust `template_origin`) existe en el modelo de datos y se persiste,
+> pero no se usa todavía.
 
 ## Arquitectura
 
@@ -26,7 +27,10 @@ src-tauri/
     launcher.rs      Spawn, log por lanzamiento, terminación verificada.
     state.rs         Estado compartido (AppState).
     error.rs         Errores tipados + Serialize para la frontera Tauri.
-  tauri.conf.json    Configuración en formato **Tauri 1.x**.
+  tauri.conf.json    Configuración en formato **Tauri 2.x**.
+  capabilities/      Permisos IPC de la ventana principal.
+  permissions/       Definición de los 11 comandos propios permitidos.
+scripts/             Guardia estática del cable IPC camelCase.
 .github/workflows/   CI: matriz Windows / macOS / Linux.
 ```
 
@@ -60,7 +64,14 @@ data/
 ```
 
 El identificador es un **UUID inmutable**: el nombre visible puede cambiar sin
-romper referencias. `template_origin` se serializa como `null` en esta fase.
+romper referencias. `templateOrigin` se serializa como `null` en esta fase.
+
+**Convención del cable y del disco:** las cinco structs IPC (`Instance`,
+`InstanceSummary`, `RamCheck`, `LaunchResult`, `KillResult`) serializan todos
+sus campos en camelCase. Los `instance.json` nuevos también usan camelCase;
+cada campo antes snake_case conserva un `#[serde(alias = "...")]` para leer
+ficheros escritos por versiones anteriores sin migración. La guardia
+`scripts/check_ipc_camel_case.py` se ejecuta en los 3 jobs de CI.
 
 ## Motor de configuración jerárquica
 
@@ -112,9 +123,11 @@ global (no en un mecanismo de persistencia paralelo).
 `sysinfo::System::new_all()` da la RAM física real del SO (mismo crate en los
 tres sistemas, verificado en la matriz de CI). Reglas:
 
-- **Error duro:** Xmx > RAM física → se rechaza.
-- **Advertencia blanda:** Xmx > 80 % de la RAM física → se avisa y se exige
-  confirmación explícita (`force=true` en `set_instance_config`).
+- **Error duro:** **100 % o más de la RAM física se rechaza en duro**
+  (`Xmx >= RAM física`); no se puede confirmar con `force`.
+- **Advertencia blanda:** Xmx > 80 % y < 100 % de la RAM física → se avisa y
+  se exige confirmación explícita (`force=true` en los comandos de
+  configuración).
 - Xms no puede superar Xmx.
 
 ## Lanzamiento y terminación
@@ -144,15 +157,16 @@ sesión. Persistir PIDs entre sesiones queda para una fase posterior.
 # Frontend (verificable localmente)
 cd frontend && npm ci && npm run build
 
-# Backend (requiere toolchain Rust + librerías de sistema de Tauri 1)
+# Backend (requiere toolchain Rust + librerías de sistema de Tauri 2)
 cd src-tauri && cargo build --release && cargo test
 ```
 
 El workflow `.github/workflows/ci.yml` ejecuta la matriz
-`windows-latest` / `macos-latest` / `ubuntu-22.04` con build del frontend,
+`windows-latest` / `macos-latest` / `ubuntu-24.04` con build del frontend,
 `cargo build --release`, `cargo test`, un smoke test de descarga real de Java 21
-desde Adoptium (Linux) y la medición de la línea base de RAM en reposo.
+desde Adoptium en los 3 SO, smoke estricto de arranque de la app en los 3 SO y
+la medición de la línea base de RAM en reposo.
 
-> Nota sobre `ubuntu-22.04`: Tauri 1.x enlaza `webkit2gtk-4.0`, disponible en
-> Ubuntu 22.04 pero sustituido por 4.1 en Ubuntu 24.04 (`ubuntu-latest` en
-> 2026). El job de Linux usa 22.04 para poder verificar de verdad el build.
+> **Runner Linux fijo:** Tauri 2 requiere `libwebkit2gtk-4.1-dev`, disponible en
+> Ubuntu 24.04. Se usa la etiqueta inmóvil `ubuntu-24.04`, no `ubuntu-latest`,
+> porque esta última puede pasar a Ubuntu 26.04 sin previo aviso en el workflow.

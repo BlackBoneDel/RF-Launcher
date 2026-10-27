@@ -3,12 +3,12 @@ name = "rf-launcher"
 version = "0.1.0"
 edition = "2021"
 
-# Backend nativo de RF Launcher (Tauri 1.x). Toda la lógica de negocio vive aquí;
+# Backend nativo de RF Launcher (Tauri 2.x). Toda la lógica de negocio vive aquí;
 # el frontend (React + Vite) solo llama a comandos #[tauri::command].
 
 [dependencies]
-# Tauri 1.x: el formato de tauri.conf.json y las capabilities son los de v1.
-tauri = { version = "1" }
+# Tauri 2.x: configuración `app`/`build` y permisos en capabilities/.
+tauri = { version = "2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -22,7 +22,7 @@ sha1 = "0.10"
 thiserror = "1"
 
 [build-dependencies]
-tauri-build = "1"
+tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

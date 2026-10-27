@@ -3,7 +3,7 @@ use thiserror::Error;
 
 /// Errores del núcleo del launcher.
 ///
-/// Tauri 1 exige que TODO lo que devuelve un comando implemente
+/// Tauri 2 exige que TODO lo que devuelve un comando implemente
 /// `serde::Serialize`, incluido el tipo de error. En lugar de convertir cada
 /// error a String en cada comando, serializamos el error como una cadena
 /// legible (su mensaje `Display`).
@@ -27,7 +27,7 @@ pub enum LauncherError {
     UnknownJavaMapping(String),
     #[error("La descarga de Java {0} falló")]
     JavaDownloadFailed(u32),
-    #[error("RAM solicitada ({requested} MB) supera la RAM física ({total} MB)")]
+    #[error("RAM solicitada ({requested} MB) alcanza o supera la RAM física ({total} MB); 100 % o más se rechaza en duro")]
     RamExceedsPhysical { requested: u64, total: u64 },
     #[error("{0}")]
     Custom(String),

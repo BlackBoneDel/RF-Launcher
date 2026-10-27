@@ -1,0 +1,63 @@
+# Permisos explícitos de la aplicación para Tauri 2.
+#
+# Tauri 2 permite por defecto todos los comandos registrados con
+# `tauri::generate_handler!`; al existir este manifiesto de aplicación, el ACL
+# pasa a regir también esos comandos. Cada permiso se concede en
+# `capabilities/default.json`. Los nombres siguen siendo los snake_case que el
+# frontend usa en `invoke('...')`; Tauri 2 sólo convierte los ARGUMENTOS a
+# camelCase, no el identificador del comando.
+
+[[permission]]
+identifier = "allow-get-theme"
+description = "Permite leer el tema persistido."
+commands.allow = ["get_theme"]
+
+[[permission]]
+identifier = "allow-set-theme"
+description = "Permite persistir el tema."
+commands.allow = ["set_theme"]
+
+[[permission]]
+identifier = "allow-list-instances"
+description = "Permite listar las instancias."
+commands.allow = ["list_instances"]
+
+[[permission]]
+identifier = "allow-get-instance"
+description = "Permite leer una instancia."
+commands.allow = ["get_instance"]
+
+[[permission]]
+identifier = "allow-create-instance"
+description = "Permite crear una instancia."
+commands.allow = ["create_instance"]
+
+[[permission]]
+identifier = "allow-resolve-config"
+description = "Permite resolver la configuración jerárquica."
+commands.allow = ["resolve_config"]
+
+[[permission]]
+identifier = "allow-set-global-config"
+description = "Permite modificar la configuración global."
+commands.allow = ["set_global_config"]
+
+[[permission]]
+identifier = "allow-set-instance-config"
+description = "Permite modificar overrides de una instancia."
+commands.allow = ["set_instance_config"]
+
+[[permission]]
+identifier = "allow-get-system-ram"
+description = "Permite consultar la RAM física."
+commands.allow = ["get_system_ram"]
+
+[[permission]]
+identifier = "allow-launch-instance"
+description = "Permite lanzar una instancia."
+commands.allow = ["launch_instance"]
+
+[[permission]]
+identifier = "allow-kill-instance"
+description = "Permite detener una instancia."
+commands.allow = ["kill_instance"]

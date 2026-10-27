@@ -1,34 +1,20 @@
 {
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "RF Launcher",
+  "version": "0.1.0",
+  "identifier": "dev.rf.launcher",
+  "mainBinaryName": "RF Launcher",
   "build": {
-    "distDir": "../frontend/dist",
-    "devPath": "http://localhost:1420",
+    "frontendDist": "../frontend/dist",
+    "devUrl": "http://localhost:1420",
     "beforeDevCommand": "cd ../frontend && npm run dev",
-    "beforeBuildCommand": "cd ../frontend && npm run build",
-    "withGlobalTauri": false
+    "beforeBuildCommand": "cd ../frontend && npm run build"
   },
-  "package": {
-    "productName": "RF Launcher",
-    "version": "0.1.0"
-  },
-  "tauri": {
-    "allowlist": {
-      "all": false
-    },
-    "bundle": {
-      "active": true,
-      "targets": "all",
-      "identifier": "dev.rf.launcher",
-      "icon": [
-        "icons/icon.png",
-        "icons/icon.ico",
-        "icons/icon.icns"
-      ]
-    },
+  "app": {
+    "withGlobalTauri": false,
     "security": {
-      "csp": null
-    },
-    "updater": {
-      "active": false
+      "csp": null,
+      "capabilities": ["default"]
     },
     "windows": [
       {
@@ -40,6 +26,15 @@
         "resizable": true,
         "fullscreen": false
       }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
     ]
   }
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import { ThemeToggle } from './components/ThemeToggle';
 import { InstanceList } from './components/InstanceList';
 import { CreateInstanceForm } from './components/CreateInstanceForm';
@@ -67,7 +67,7 @@ export default function App() {
     fabricLoader: string | null;
   }) => {
     try {
-      // Las claves son camelCase: Tauri 1 las mapea a los parámetros
+      // Las claves son camelCase: Tauri 2 las mapea a los parámetros
       // snake_case del comando Rust `create_instance`.
       await invoke('create_instance', values);
       setView('instances');
