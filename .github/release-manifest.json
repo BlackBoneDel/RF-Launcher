@@ -1,0 +1,7 @@
+{
+  "version": "0.1.0",
+  "release_tag": "v0.1.0",
+  "target_sha": "fd29ff88282a6ff2dad2798f518e850939b2ff82",
+  "build_trigger_tag": "build-v0.1.0",
+  "product_name": "RF Launcher"
+}
