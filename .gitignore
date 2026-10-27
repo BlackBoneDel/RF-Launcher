@@ -1,0 +1,26 @@
+# Rust
+/target/
+src-tauri/target/
+**/*.rs.bak
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.env.local
+frontend/.env.*.local
+npm-debug.log*
+
+# Tauri
+src-tauri/gen/
+*.app
+*.msi
+*.deb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs de lanzamientos de instancias (fuera del repo)
+*.log
+!src-tauri/src/**/*.rs
