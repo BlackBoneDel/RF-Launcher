@@ -91,6 +91,10 @@ verificado.
   que configurar certificados y notarización.
 - El workflow no puede probar una instalación interactiva en un sistema limpio.
   Eso se cubre con `RELEASE-0.1.0-MANUAL-CHECKLIST.md`.
+- El smoke de arranque en Linux reintenta `pgrep` hasta 20 s. Un único
+  muestreo a los 12 s produjo un falso negativo en el run `40516180072`:
+  el cleanup del job terminó un `rf-launcher` vivo 1 s después. El PR run
+  `40516187045` sí estuvo 3/3 verde, pero la carrera quedó corregida.
 - El icono fuente se guarda en `src-tauri/icons/app-icon-source.png`; los iconos
   nativos se regeneran con:
   `cd src-tauri && npx --yes @tauri-apps/cli@2.12.4 icon icons/app-icon-source.png`.

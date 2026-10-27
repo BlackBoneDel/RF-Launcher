@@ -181,8 +181,18 @@ jobs:
           echo "RAM_IDLE_OS=Linux" >> ram_baseline.txt
           echo "RAM_IDLE_METRIC=VmRSS de /proc/PID/status (KB)" >> ram_baseline.txt
           xvfb-run -a ./target/release/rf-launcher >> launcher_ram.log 2>&1 &
-          sleep 12
-          LPID=$(pgrep -x rf-launcher | head -1)
+          # Un único muestreo a los 12 s produjo un falso negativo en el run
+          # 40516180072: el proceso apareció vivo en el cleanup 1 s después.
+          # Reintentamos hasta 20 s antes de declarar BLOCKED.
+          LPID=""
+          for attempt in $(seq 1 20); do
+            LPID=$(pgrep -x rf-launcher | head -1)
+            if [ -n "$LPID" ]; then
+              echo "RAM_IDLE_WAIT_ATTEMPTS=$attempt" >> ram_baseline.txt
+              break
+            fi
+            sleep 1
+          done
           if [ -n "$LPID" ]; then
             MAIN=$(awk '/^VmRSS:/{print $2}' "/proc/$LPID/status")
             TREE=${MAIN:-0}
