@@ -103,6 +103,8 @@ describe('Fase 3-A.2 sub-ronda 1 — bloqueantes UI → IPC → backend', () => 
     await browser.pause(1000);
     const result = await browser.$(`[data-testid="launch-message-${instanceId}"]`);
     console.log(`EDIT_RESULT=${await result.isExisting() ? await result.getText() : '<none>'}`);
+    console.log(`EDIT_DISK=${JSON.stringify(readInstance(instanceId))}`);
+    console.log(`EDIT_DOM=${await browser.$(`[data-testid="instance-name-${instanceId}"]`).getText()}`);
 
     await waitForText(`instance-name-${instanceId}`, 'E2E Editada');
     await waitForText(`instance-version-${instanceId}`, '1.21.1');

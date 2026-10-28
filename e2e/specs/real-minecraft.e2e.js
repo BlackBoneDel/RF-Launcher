@@ -69,8 +69,14 @@ describe('Minecraft Fabric real — UI, JVM y PID', () => {
       await browser.waitUntil(() => fs.readdirSync(logs).some(n => fs.statSync(path.join(logs, n)).size > 0), { timeout: 30000, timeoutMsg: 'JVM sin log real' });
       for (const file of fs.readdirSync(logs)) {
         const content = fs.readFileSync(path.join(logs, file), 'utf8');
-        if (content) console.log(`E2E_JVM_LOG=${content.slice(0, 3000)}`);
+        if (content) {
+          console.log(`E2E_JVM_LOG=${content.slice(0, 3000)}`);
+          assert.ok(/Loading Minecraft/i.test(content), 'No hay log de arranque de Fabric; un error JVM no demuestra arranque');
+        }
       }
+      const state = fs.readFileSync(`${proc}/stat`, 'utf8').match(/^\d+ \(.*\) (\S)/)?.[1];
+      assert.ok(state && state !== 'Z', `JVM no está viva antes de kill: state=${state}`);
+      console.log(`E2E_JVM_STATE_BEFORE_KILL=${state}`);
       await browser.$(selector(`kill-instance-${id}`)).click();
       await browser.waitUntil(async () => (await browser.$(selector(`launch-message-${id}`)).getText()).includes('detenida'), { timeout: 30000 });
       await browser.waitUntil(() => !fs.existsSync(proc), { timeout: 30000 });

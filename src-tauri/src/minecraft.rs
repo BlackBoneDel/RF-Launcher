@@ -323,27 +323,10 @@ fn resolve_fixture(instances_dir: &Path, instance_id: &uuid::Uuid) -> Result<Res
 
 /// Reglas de inclusión de librerías de Mojang.
 fn rules_apply(lib: &Value) -> bool {
-    let Some(rules) = lib.get("rules").and_then(|v| v.as_array()) else {
-        return true;
-    };
-    let mut allowed = true;
-    for rule in rules {
-        let action = rule.get("action").and_then(|v| v.as_str()).unwrap_or("allow");
-        let os = rule.get("os").and_then(|v| v.as_object());
-        let os_matches = os.map_or(true, |os| {
-            let name_ok = os.get("name").and_then(|v| v.as_str()).map_or(true, |name| {
-                matches_os(name)
-            });
-            let arch_ok = os.get("arch").and_then(|v| v.as_str()).map_or(true, |arch| {
-                arch == target_arch()
-            });
-            name_ok && arch_ok
-        });
-        if os_matches {
-            allowed = action == "allow";
-        }
+    match lib.get("rules") {
+        None => true,
+        Some(rules) => rules_apply_value(rules),
     }
-    allowed
 }
 
 fn matches_os(name: &str) -> bool {
@@ -472,7 +455,7 @@ fn resolve_json_args(args: &[Value], ctx: &LaunchContext) -> Vec<String> {
 fn rules_apply_value(rules: &Value) -> bool {
     let empty: Vec<Value> = Vec::new();
     let arr = rules.as_array().unwrap_or(&empty);
-    let mut allowed = true;
+    let mut allowed = false;
     for rule in arr {
         let action = rule.get("action").and_then(|v| v.as_str()).unwrap_or("allow");
         let os = rule.get("os").and_then(|v| v.as_object());
@@ -481,7 +464,10 @@ fn rules_apply_value(rules: &Value) -> bool {
             let arch_ok = os.get("arch").and_then(|v| v.as_str()).map_or(true, |arch| arch == target_arch());
             name_ok && arch_ok
         });
-        if os_matches {
+        // Las features de Mojang son falsas si el launcher no las activa.
+        let features_match = rule.get("features").and_then(Value::as_object)
+            .map_or(true, |features| features.values().all(|v| v.as_bool() == Some(false)));
+        if os_matches && features_match {
             allowed = action == "allow";
         }
     }
@@ -553,6 +539,16 @@ mod tests {
             substitute("--gameDir ${game_directory}", &ctx),
             "--gameDir /tmp/game"
         );
+    }
+
+    #[test]
+    fn rules_require_matching_os_and_features() {
+        let other = if cfg!(target_os = "macos") { "windows" } else { "osx" };
+        let rules = serde_json::json!([{ "action": "allow", "os": { "name": other }}]);
+        assert!(!rules_apply_value(&rules));
+        let features = serde_json::json!([{ "action": "allow", "features": { "is_demo_user": true }}]);
+        assert!(!rules_apply_value(&features));
+        println!("MOJANG_RULES_NONMATCH=DENIED FEATURES_UNSET=DENIED");
     }
 
     #[test]
