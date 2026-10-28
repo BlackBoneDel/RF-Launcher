@@ -124,8 +124,67 @@ impl Instance {
         Ok(out)
     }
 
+    /// Actualiza los campos editables de una instancia ya creada.
+    pub fn update(
+        &mut self,
+        name: String,
+        minecraft_version: String,
+        fabric_loader: Option<String>,
+    ) -> Result<()> {
+        if name.trim().is_empty() {
+            return Err("El nombre de la instancia no puede estar vacío".into());
+        }
+        if minecraft_version.trim().is_empty() {
+            return Err("La versión de Minecraft no puede estar vacía".into());
+        }
+        self.name = name;
+        self.minecraft_version = minecraft_version;
+        self.fabric_loader = fabric_loader;
+        Ok(())
+    }
+
+    /// Inserta un override y mantiene sincronizados los campos `ram_*` que la
+    /// UI muestra. Sin esto, `set_instance_config` persistía el override pero
+    /// la tarjeta seguía diciendo "hereda global" (hallazgo de la Sección 0).
     pub fn set_override(&mut self, key: ConfigKey, value: ConfigValue) {
+        match key {
+            ConfigKey::RamMinMb => {
+                self.ram_min_mb = value.as_int().map(|v| v.max(0) as u64);
+            }
+            ConfigKey::RamMaxMb => {
+                self.ram_max_mb = value.as_int().map(|v| v.max(0) as u64);
+            }
+            _ => {}
+        }
         self.config_overrides.insert(key.as_str().to_string(), value);
+    }
+
+    /// Elimina un override y devuelve al estado "hereda global".
+    pub fn clear_override(&mut self, key: ConfigKey) -> bool {
+        match key {
+            ConfigKey::RamMinMb => self.ram_min_mb = None,
+            ConfigKey::RamMaxMb => self.ram_max_mb = None,
+            _ => {}
+        }
+        self.config_overrides.remove(key.as_str()).is_some()
+    }
+
+    /// Borra la carpeta completa de la instancia. Defensa de path: el objetivo
+    /// canonicalizado debe seguir siendo un hijo estricto del directorio raíz.
+    pub fn delete(instances_dir: &Path, id: &Uuid) -> Result<()> {
+        let dir = Self::dir(instances_dir, id);
+        if !dir.exists() {
+            return Ok(());
+        }
+        let root = fs::canonicalize(instances_dir)
+            .map_err(|e| format!("No se pudo canonicalizar instances_dir: {e}"))?;
+        let target = fs::canonicalize(&dir)
+            .map_err(|e| format!("No se pudo canonicalizar la instancia: {e}"))?;
+        if target == root || !target.starts_with(&root) {
+            return Err("Ruta de instancia fuera del directorio raíz; borrado abortado".into());
+        }
+        fs::remove_dir_all(&target)?;
+        Ok(())
     }
 
     pub fn mark_launched(&mut self) {
@@ -208,6 +267,62 @@ mod tests {
         legacy.insert("template_origin".into(), serde_json::json!("legacy"));
         let back: Instance = serde_json::from_value(serde_json::Value::Object(legacy)).unwrap();
         assert_eq!(back.template_origin.as_deref(), Some("legacy"));
+    }
+
+    #[test]
+    fn override_syncs_ram_fields_and_clear_returns_to_global() {
+        let dir = std::env::temp_dir().join(format!("rf-override-sync-{}", now_secs()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("minecraft")).unwrap();
+        fs::create_dir_all(dir.join("logs")).unwrap();
+        let mut inst = Instance {
+            id: Uuid::new_v4(),
+            name: "x".into(),
+            minecraft_version: "1.21".into(),
+            fabric_loader: None,
+            template_origin: None,
+            config_overrides: Default::default(),
+            ram_min_mb: None,
+            ram_max_mb: None,
+            created_at: now_secs(),
+            last_launched_at: None,
+        };
+        inst.set_override(ConfigKey::RamMaxMb, ConfigValue::Int(4096));
+        assert_eq!(inst.ram_max_mb, Some(4096));
+        assert!(inst.clear_override(ConfigKey::RamMaxMb));
+        assert_eq!(inst.ram_max_mb, None);
+        assert!(!inst.config_overrides.contains_key("RamMaxMb"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_rejects_empty_name_and_changes_fields() {
+        let mut inst = Instance {
+            id: Uuid::new_v4(),
+            name: "a".into(),
+            minecraft_version: "1.21".into(),
+            fabric_loader: None,
+            template_origin: None,
+            config_overrides: Default::default(),
+            ram_min_mb: None,
+            ram_max_mb: None,
+            created_at: now_secs(),
+            last_launched_at: None,
+        };
+        assert!(inst.update("".into(), "1.21".into(), None).is_err());
+        inst.update("b".into(), "1.21.1".into(), Some("0.20.1".into())).unwrap();
+        assert_eq!(inst.name, "b");
+        assert_eq!(inst.minecraft_version, "1.21.1");
+        assert_eq!(inst.fabric_loader.as_deref(), Some("0.20.1"));
+    }
+
+    #[test]
+    fn delete_refuses_path_outside_instances_root() {
+        let root = std::env::temp_dir().join(format!("rf-delete-root-{}", now_secs()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        assert!(Instance::delete(&root, &Uuid::new_v4()).is_ok());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

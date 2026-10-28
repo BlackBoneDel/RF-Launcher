@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -9,7 +10,32 @@ use sha2::{Digest, Sha256};
 
 use crate::error::Result;
 
-const ADOPTIUM_BASE: &str = "https://api.adoptium.net/v3";
+const DEFAULT_ADOPTIUM_BASE: &str = "https://api.adoptium.net/v3";
+
+fn adoptium_base() -> String {
+    #[cfg(feature = "e2e")]
+    {
+        if let Ok(value) = std::env::var("RF_LAUNCHER_E2E_ADOPTIUM_BASE") {
+            return value.trim_end_matches('/').to_string();
+        }
+    }
+    DEFAULT_ADOPTIUM_BASE.to_string()
+}
+
+/// Evento de progreso de Java. Es un dato puro: la capa Tauri lo convierte en
+/// un evento IPC; los tests unitarios pueden usar un colector sin WebView.
+#[derive(Debug, Clone)]
+pub struct JavaProgressEvent {
+    pub version: u32,
+    pub stage: &'static str,
+    pub downloaded: u64,
+    pub total: Option<u64>,
+    pub message: String,
+}
+
+pub trait JavaProgress: Send + Sync {
+    fn on_event(&self, event: JavaProgressEvent);
+}
 
 /// Reintenta una petición HTTP hasta 3 veces con backoff, registrando cada
 /// intento. La auditoría de Fase 3-A detectó un fallo de red transitorio en
@@ -95,9 +121,42 @@ impl JavaManager {
     /// a mitad de la descarga, checksum incorrecto, extracción inválida) se
     /// borran staging, el temporal de descarga y el directorio de destino, y
     /// se devuelve el error. El marcador se escribe SÓLO tras el rename final.
+    /// Compatibilidad con los tests/smokes existentes: descarga permitida y
+    /// sin observador de progreso.
     pub async fn ensure(&self, version: u32) -> Result<PathBuf> {
+        self.ensure_with_options(version, true, None).await
+    }
+
+    /// Punto de entrada real usado por `launch_instance`.
+    ///
+    /// Orden: (1) Java del sistema con versión verificada ejecutando
+    /// `java -version`; (2) JDK gestionado ya instalado; (3) descarga Adoptium
+    /// si `allow_download` lo permite; (4) error claro si está desactivado.
+    pub async fn ensure_with_options(
+        &self,
+        version: u32,
+        allow_download: bool,
+        progress: Option<&dyn JavaProgress>,
+    ) -> Result<PathBuf> {
+        if let Some(system_java) = detect_system_java(version, progress) {
+            return Ok(system_java);
+        }
         if self.is_installed(version) {
+            emit(
+                progress,
+                version,
+                "ready",
+                0,
+                None,
+                format!("Java {version} gestionado ya instalado"),
+            );
             return Ok(self.java_binary(version));
+        }
+        if !allow_download {
+            return Err(format!(
+                "Java {version} no está instalado y la descarga automática está desactivada"
+            )
+            .into());
         }
 
         fs::create_dir_all(&self.java_dir)?;
@@ -105,7 +164,7 @@ impl JavaManager {
         let home = self.java_home(version);
         self.clean_stale_artifacts(version);
 
-        let outcome = self.try_install(version, &staging, &home).await;
+        let outcome = self.try_install(version, &staging, &home, progress).await;
         if let Err(err) = outcome {
             let _ = fs::remove_dir_all(&staging);
             let _ = fs::remove_dir_all(&home);
@@ -121,14 +180,39 @@ impl JavaManager {
         version: u32,
         staging: &Path,
         home: &Path,
+        progress: Option<&dyn JavaProgress>,
     ) -> Result<()> {
         fs::create_dir_all(staging)?;
+        emit(
+            progress,
+            version,
+            "checking",
+            0,
+            None,
+            format!("Buscando una distribución Adoptium de Java {version}"),
+        );
         let asset = Self::pick_asset(version).await?;
-        let archive = self.download(&asset).await?;
+        let archive = self.download(&asset, version, progress).await?;
 
+        emit(
+            progress,
+            version,
+            "verifying",
+            fs::metadata(&archive).map(|m| m.len()).unwrap_or(0),
+            fs::metadata(&archive).ok().map(|m| m.len()),
+            "Verificando SHA-256 del JDK descargado".into(),
+        );
         if let Some(checksum) = &asset.checksum {
             verify_sha256(&archive, checksum)?;
         }
+        emit(
+            progress,
+            version,
+            "extracting",
+            fs::metadata(&archive).map(|m| m.len()).unwrap_or(0),
+            fs::metadata(&archive).ok().map(|m| m.len()),
+            "Extrayendo JDK".into(),
+        );
         Self::extract(&archive, staging)?;
         let java_bin = find_java_binary(staging)?;
 
@@ -144,6 +228,14 @@ impl JavaManager {
         // Marcador de instalación COMPLETA, escrito al final. Si el proceso
         // muere antes de aquí, `is_installed` será false y se reintentará.
         fs::write(home.join(".rf-launcher-ok"), b"rf-launcher\n")?;
+        emit(
+            progress,
+            version,
+            "ready",
+            fs::metadata(&archive).map(|m| m.len()).unwrap_or(0),
+            fs::metadata(&archive).ok().map(|m| m.len()),
+            format!("Java {version} listo"),
+        );
 
         let _ = fs::remove_file(&archive);
         let _ = fs::remove_dir_all(staging);
@@ -174,7 +266,8 @@ impl JavaManager {
     async fn pick_asset(version: u32) -> Result<AdoptiumAsset> {
         let os = adoptium_os();
         let arch = adoptium_arch();
-        let url = format!("{ADOPTIUM_BASE}/assets/feature_releases/{version}/ga");
+        let base = adoptium_base();
+        let url = format!("{base}/assets/feature_releases/{version}/ga");
         println!("ADOPTIUM_API_URL={url} os={os} arch={arch}");
 
         let request = reqwest::Client::new()
@@ -233,7 +326,7 @@ impl JavaManager {
 
         // Fallback documentado: descarga directa (sin checksum en la URL).
         let fallback = format!(
-            "{ADOPTIUM_BASE}/binary/latest/{version}/ga/{os}/{arch}/jdk/hotspot/normal/eclipse"
+            "{base}/binary/latest/{version}/ga/{os}/{arch}/jdk/hotspot/normal/eclipse"
         );
         println!("ADOPTIUM_API_FALLBACK={fallback}");
         Ok(AdoptiumAsset {
@@ -245,7 +338,12 @@ impl JavaManager {
     /// Descarga el artefacto a un fichero temporal con la extensión REAL
     /// (deducida de la URL final tras las redirecciones), para que la
     /// extracción sepa si es tar.gz o zip.
-    async fn download(&self, asset: &AdoptiumAsset) -> Result<PathBuf> {
+    async fn download(
+        &self,
+        asset: &AdoptiumAsset,
+        version: u32,
+        progress: Option<&dyn JavaProgress>,
+    ) -> Result<PathBuf> {
         let request = reqwest::Client::new()
             .get(&asset.link)
             .header("User-Agent", "rf-launcher/0.1")
@@ -265,10 +363,29 @@ impl JavaManager {
             .java_dir
             .join(format!(".download-{}.{suffix}", next_id()));
 
+        let total = response.content_length();
+        emit(
+            progress,
+            version,
+            "downloading",
+            0,
+            total,
+            format!("Descargando Java {version}"),
+        );
         let mut response = response;
         let mut file = fs::File::create(&archive)?;
+        let mut downloaded = 0u64;
         while let Some(chunk) = response.chunk().await? {
             file.write_all(&chunk)?;
+            downloaded += chunk.len() as u64;
+            emit(
+                progress,
+                version,
+                "downloading",
+                downloaded,
+                total,
+                format!("Descargando Java {version}"),
+            );
         }
         file.flush()?;
         drop(file);
@@ -290,6 +407,112 @@ impl JavaManager {
         }
         Ok(())
     }
+}
+
+fn emit(
+    progress: Option<&dyn JavaProgress>,
+    version: u32,
+    stage: &'static str,
+    downloaded: u64,
+    total: Option<u64>,
+    message: String,
+) {
+    if let Some(p) = progress {
+        p.on_event(JavaProgressEvent {
+            version,
+            stage,
+            downloaded,
+            total,
+            message,
+        });
+    }
+}
+
+fn java_bin_name() -> &'static str {
+    if cfg!(windows) { "java.exe" } else { "java" }
+}
+
+/// Parsea `openjdk version "21.0.1"` / `java version "1.8.0_412"`.
+fn parse_java_major(text: &str) -> Option<u32> {
+    let marker = "version \"";
+    let start = text.find(marker)? + marker.len();
+    let rest = &text[start..];
+    let end = rest.find('"')?;
+    let raw = &rest[..end];
+    let first = raw.split('.').next()?;
+    if first == "1" {
+        raw.split('.').nth(1)?.parse::<u32>().ok()
+    } else {
+        first.parse::<u32>().ok()
+    }
+}
+
+fn probe_java_version(bin: &Path) -> Option<u32> {
+    let output = Command::new(bin).arg("-version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    parse_java_major(&text)
+}
+
+/// Detecta una instalación de Java del sistema y VERIFICA su versión real
+/// ejecutando `java -version`; no confía en el nombre de la carpeta.
+fn detect_system_java(version: u32, progress: Option<&dyn JavaProgress>) -> Option<PathBuf> {
+    #[cfg(feature = "e2e")]
+    {
+        if std::env::var_os("RF_LAUNCHER_E2E_DISABLE_SYSTEM_JAVA").is_some() {
+            return None;
+        }
+    }
+    emit(
+        progress,
+        version,
+        "system-java",
+        0,
+        None,
+        format!("Buscando Java {version} en el sistema"),
+    );
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("JAVA_HOME") {
+        candidates.push(PathBuf::from(home).join("bin").join(java_bin_name()));
+    }
+    if cfg!(windows) {
+        candidates.push(PathBuf::from(format!(
+            "C:\\Program Files\\Java\\jdk-{version}\\bin\\java.exe"
+        )));
+        candidates.push(PathBuf::from(format!(
+            "C:\\Program Files\\Eclipse Adoptium\\jdk-{version}\\bin\\java.exe"
+        )));
+    } else if cfg!(target_os = "macos") {
+        candidates.push(PathBuf::from(format!(
+            "/Library/Java/JavaVirtualMachines/temurin-{version}.jdk/Contents/Home/bin/java"
+        )));
+    } else {
+        candidates.push(PathBuf::from(format!(
+            "/usr/lib/jvm/java-{version}-openjdk-amd64/bin/java"
+        )));
+        candidates.push(PathBuf::from(format!(
+            "/usr/lib/jvm/java-{version}-openjdk/bin/java"
+        )));
+    }
+    candidates.push(PathBuf::from(java_bin_name())); // PATH
+
+    for candidate in candidates {
+        if probe_java_version(&candidate) == Some(version) {
+            emit(
+                progress,
+                version,
+                "ready",
+                0,
+                None,
+                format!("Java {version} del sistema: {}", candidate.display()),
+            );
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Extrae `link` y `checksum` de un objeto `binary` de la API de Adoptium,
@@ -625,6 +848,13 @@ mod tests {
             compared > 0,
             "ninguna comparación real contra Mojang; errores: {network_errors:?}"
         );
+    }
+
+    #[test]
+    fn parse_java_major_handles_modern_and_legacy() {
+        assert_eq!(parse_java_major("openjdk version \"21.0.1\" 2026-01-01"), Some(21));
+        assert_eq!(parse_java_major("java version \"1.8.0_412\""), Some(8));
+        assert_eq!(parse_java_major("sin versión"), None);
     }
 
     #[test]

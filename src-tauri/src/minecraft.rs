@@ -51,6 +51,14 @@ pub async fn resolve(
     minecraft_version: &str,
     fabric_loader: Option<&str>,
 ) -> Result<ResolvedLaunch> {
+    // Hook E2E (solo con --features e2e): evita red/juegos reales en CI pero
+    // conserva el resto del pipeline (Java, RAM, spawn y kill) contra un
+    // proceso del sistema operativo real.
+    #[cfg(feature = "e2e")]
+    if std::env::var_os("RF_LAUNCHER_E2E_MINECRAFT_FIXTURE").is_some() {
+        return resolve_fixture(instances_dir, instance_id);
+    }
+
     fs::create_dir_all(assets_dir)?;
     let version_dir = assets_dir.join("versions").join(minecraft_version);
     fs::create_dir_all(&version_dir)?;
@@ -204,6 +212,9 @@ pub async fn resolve(
         game_directory: game_dir.clone(),
         assets_root: assets_dir.to_path_buf(),
         assets_index_name: assets_index,
+        // Placeholder de identidad offline — NO es sistema de cuentas,
+        // reservado a Fase 3-C. Minecraft exige estos argumentos incluso sin
+        // login; aquí son valores neutros, no credenciales niOAuth.
         auth_player_name: "Player".to_string(),
         auth_uuid: "00000000-0000-0000-0000-000000000000".to_string(),
         auth_access_token: String::new(),
@@ -258,6 +269,29 @@ pub async fn resolve(
         jvm_args: jvm_args_all,
         game_args,
         classpath,
+        working_dir: game_dir,
+        log_file,
+    })
+}
+
+/// Resuelve datos mínimos para el E2E: el "java" fixture ignora los argumentos
+/// y se mantiene vivo hasta que `kill_instance` lo termine por PID.
+#[cfg(feature = "e2e")]
+fn resolve_fixture(instances_dir: &Path, instance_id: &uuid::Uuid) -> Result<ResolvedLaunch> {
+    let game_dir = instances_dir.join(instance_id.to_string()).join("minecraft");
+    let log_file = instances_dir
+        .join(instance_id.to_string())
+        .join("logs")
+        .join("launch-e2e.log");
+    fs::create_dir_all(&game_dir)?;
+    if let Some(parent) = log_file.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(ResolvedLaunch {
+        main_class: "rf.launcher.e2e.FakeMinecraft".to_string(),
+        jvm_args: Vec::new(),
+        game_args: Vec::new(),
+        classpath: Vec::new(),
         working_dir: game_dir,
         log_file,
     })

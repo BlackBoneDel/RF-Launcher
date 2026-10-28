@@ -1,0 +1,16 @@
+{
+  "name": "rf-launcher-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "E2E real Linux: WebdriverIO + tauri-driver sobre el binario compilado",
+  "scripts": {
+    "test": "wdio run ./wdio.conf.js"
+  },
+  "devDependencies": {
+    "@wdio/cli": "^9.19.0",
+    "@wdio/local-runner": "^9.19.0",
+    "@wdio/mocha-framework": "^9.19.0",
+    "@wdio/spec-reporter": "^9.19.0"
+  }
+}

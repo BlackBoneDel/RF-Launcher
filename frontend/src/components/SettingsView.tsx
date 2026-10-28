@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
-import { getSystemRam, getTheme, setGlobalConfig } from '../lib/tauri';
+import { getGlobalConfig, getSystemRam, getTheme, setGlobalConfig } from '../lib/tauri';
 import type { ConfigKey, ConfigValue } from '../types';
 
 type Props = {
@@ -39,6 +39,11 @@ export function SettingsView({ onBack }: Props) {
     try {
       const sys = await getSystemRam();
       setTotalRam(sys.totalMb ?? null);
+    } catch {}
+    try {
+      // Lectura real del backend: el estado inicial ya no se asume `true`.
+      const value = await getGlobalConfig('JavaAutoDownload');
+      if (value.kind === 'Bool') setJavaAuto(value.value);
     } catch {}
   }, []);
 

@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use crate::config::{ConfigKey, ConfigValue};
 use crate::error::{LauncherError, Result};
 use crate::instance::Instance;
-use crate::java::{JavaManager, java_version_for_minecraft_resolved};
+use crate::java::{
+    JavaManager, JavaProgress, JavaProgressEvent, java_version_for_minecraft_resolved,
+};
 use crate::launcher::KillResult;
 use crate::minecraft::resolve as mc_resolve;
 use crate::ram::{total_ram_mb, validate_ram_max, RamValidation};
@@ -31,6 +33,44 @@ pub struct RamCheck {
 enum RamConfigDecision {
     Accept,
     Warn(RamCheck),
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JavaProgressPayload {
+    version: u32,
+    stage: String,
+    #[serde(alias = "downloaded_bytes")]
+    downloaded_bytes: u64,
+    #[serde(alias = "total_bytes")]
+    total_bytes: Option<u64>,
+    percent: Option<u8>,
+    message: String,
+}
+
+struct TauriJavaProgress<'a>(&'a AppHandle);
+
+impl JavaProgress for TauriJavaProgress<'_> {
+    fn on_event(&self, event: JavaProgressEvent) {
+        let percent = event.total.and_then(|total| {
+            if total == 0 {
+                None
+            } else {
+                Some(((event.downloaded.min(total) * 100) / total) as u8)
+            }
+        });
+        let _ = self.0.emit(
+            "java-download-progress",
+            JavaProgressPayload {
+                version: event.version,
+                stage: event.stage.to_string(),
+                downloaded_bytes: event.downloaded,
+                total_bytes: event.total,
+                percent,
+                message: event.message,
+            },
+        );
+    }
 }
 
 fn decide_ram_config<F>(
@@ -109,6 +149,70 @@ pub async fn create_instance(
         fabric_loader,
     )?;
     Ok(instance)
+}
+
+#[tauri::command]
+pub async fn update_instance(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+    minecraft_version: String,
+    fabric_loader: Option<String>,
+) -> Result<Instance> {
+    let uuid = Uuid::parse_str(&id)
+        .map_err(|_| LauncherError::InvalidUuid(id.clone()))?;
+    let inner = state.inner.lock().map_err(|e| LauncherError::Custom(e.to_string()))?;
+    let mut instance = Instance::load(&inner.instances_dir, &uuid)?;
+    instance.update(name, minecraft_version, fabric_loader)?;
+    instance.save(&inner.instances_dir)?;
+    Ok(instance)
+}
+
+#[tauri::command]
+pub async fn delete_instance(state: State<'_, AppState>, id: String) -> Result<()> {
+    let uuid = Uuid::parse_str(&id)
+        .map_err(|_| LauncherError::InvalidUuid(id.clone()))?;
+    let inner = state.inner.lock().map_err(|e| LauncherError::Custom(e.to_string()))?;
+    // Si la instancia está corriendo, se termina antes de borrar su carpeta.
+    let mut launcher = inner
+        .launcher
+        .lock()
+        .map_err(|e| LauncherError::Custom(e.to_string()))?;
+    let _ = launcher.kill(&uuid);
+    Instance::delete(&inner.instances_dir, &uuid)
+}
+
+#[tauri::command]
+pub async fn clear_instance_config(
+    state: State<'_, AppState>,
+    instance_id: String,
+    key: String,
+) -> Result<RamCheck> {
+    let uuid = Uuid::parse_str(&instance_id)
+        .map_err(|_| LauncherError::InvalidUuid(instance_id.clone()))?;
+    let config_key = ConfigKey::from_str(&key)
+        .ok_or_else(|| LauncherError::UnknownConfigKey(key.clone()))?;
+    let inner = state.inner.lock().map_err(|e| LauncherError::Custom(e.to_string()))?;
+    let mut instance = Instance::load(&inner.instances_dir, &uuid)?;
+    instance.clear_override(config_key);
+    instance.save(&inner.instances_dir)?;
+    Ok(RamCheck {
+        total_mb: crate::ram::total_ram_mb(),
+        ok: true,
+        warning: None,
+    })
+}
+
+#[tauri::command]
+pub async fn get_global_config(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<ConfigValue> {
+    let config_key = ConfigKey::from_str(&key)
+        .ok_or_else(|| LauncherError::UnknownConfigKey(key.clone()))?;
+    let inner = state.inner.lock().map_err(|e| LauncherError::Custom(e.to_string()))?;
+    let no_overrides = std::collections::HashMap::new();
+    Ok(inner.config.resolve(&no_overrides, config_key))
 }
 
 #[tauri::command]
@@ -235,7 +339,11 @@ pub async fn get_system_ram() -> Result<RamCheck> {
 }
 
 #[tauri::command]
-pub async fn launch_instance(state: State<'_, AppState>, id: String) -> Result<LaunchResult> {
+pub async fn launch_instance(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<LaunchResult> {
     let uuid = Uuid::parse_str(&id)
         .map_err(|_| LauncherError::InvalidUuid(id.clone()))?;
 
@@ -257,8 +365,19 @@ pub async fn launch_instance(state: State<'_, AppState>, id: String) -> Result<L
         inner.java_dir.clone()
     };
     let java_version = java_version_for_minecraft_resolved(&instance.minecraft_version).await?;
+    let java_auto = {
+        let inner = state.inner.lock().map_err(|e| LauncherError::Custom(e.to_string()))?;
+        inner
+            .config
+            .resolve(&instance.config_overrides, ConfigKey::JavaAutoDownload)
+            .as_bool()
+            .unwrap_or(true)
+    };
     let java_manager = JavaManager::new(java_dir);
-    let java_path = java_manager.ensure(java_version).await?;
+    let progress = TauriJavaProgress(&app);
+    let java_path = java_manager
+        .ensure_with_options(java_version, java_auto, Some(&progress))
+        .await?;
 
     // 3. RAM: resolución jerárquica e invalidación contra la RAM física.
     let (ram_min, ram_max) = {
