@@ -3,7 +3,7 @@ import { config as base } from './wdio.conf.js';
 export const config = {
   ...base,
   specs: ['./specs/real-minecraft.e2e.js'],
-  mochaOpts: { ui: 'bdd', timeout: 600000 },
+  mochaOpts: { ui: 'bdd', timeout: 1200000 },
   onPrepare: async () => {
     await base.onPrepare();
     delete process.env.RF_LAUNCHER_E2E_ADOPTIUM_BASE;

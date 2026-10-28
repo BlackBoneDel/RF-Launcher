@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 
 const root = path.join(process.env.XDG_DATA_HOME, 'io.github.blackbonedel.rflauncher');
@@ -48,12 +49,23 @@ describe('Minecraft Fabric real — UI, JVM y PID', () => {
         if (!await msg.isExisting()) return false;
         text = await msg.getText();
         return text.length > 0;
-      }, { timeout: 480000, timeoutMsg: 'No hubo resultado de lanzamiento real en 8 minutos' });
+      }, { timeout: 900000, timeoutMsg: 'No hubo resultado de lanzamiento real en 8 minutos' });
       console.log(`E2E_LAUNCH_MESSAGE=${text}`);
       const match = text.match(/PID (\d+)/);
       assert.ok(match, `No se lanzó JVM: ${text}`);
       pid = Number(match[1]);
       const proc = `/proc/${pid}`;
+      const assetsRoot = path.join(root, 'assets');
+      const index = JSON.parse(fs.readFileSync(path.join(assetsRoot, 'indexes', '17.json'), 'utf8'));
+      const hashes = [...new Set(Object.values(index.objects).map(object => object.hash))];
+      assert.ok(hashes.length > 0, 'Índice de assets vacío');
+      for (const hash of hashes) {
+        assert.match(hash, /^[0-9a-f]{40}$/);
+        const file = path.join(assetsRoot, 'objects', hash.slice(0, 2), hash);
+        assert.ok(fs.existsSync(file), `Asset ausente: ${hash}`);
+        assert.equal(crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex'), hash, `SHA-1 asset incorrecto: ${hash}`);
+      }
+      console.log(`E2E_ASSETS_INDEPENDENT_SHA1_VERIFIED=${hashes.length}`);
       assert.ok(observed && observed.pid === pid, 'No se observó el proceso JVM con el PID reportado');
       const { exe, args } = observed;
       console.log(`E2E_JVM_PID=${pid} EXE=${exe}`);
@@ -82,6 +94,10 @@ describe('Minecraft Fabric real — UI, JVM y PID', () => {
       const state = fs.readFileSync(`${proc}/stat`, 'utf8').match(/^\d+ \(.*\) (\S)/)?.[1];
       assert.ok(state && state !== 'Z', `JVM no está viva antes de kill: state=${state}`);
       console.log(`E2E_JVM_STATE_BEFORE_KILL=${state}`);
+      const fullLog = fs.readdirSync(logs).map(file => fs.readFileSync(path.join(logs, file), 'utf8')).join('\n');
+      const missingAssets = fullLog.split('\n').filter(line => /NoSuchFileException:.*assets\/objects\//.test(line));
+      console.log(`E2E_ASSET_MISSING_COUNT=${missingAssets.length}`);
+      assert.equal(missingAssets.length, 0, `Faltan objetos de assets: ${missingAssets.join(' | ')}`);
       await browser.$(selector(`kill-instance-${id}`)).click();
       await browser.waitUntil(async () => (await browser.$(selector(`launch-message-${id}`)).getText()).includes('detenida'), { timeout: 30000 });
       await browser.waitUntil(() => !fs.existsSync(proc), { timeout: 30000 });

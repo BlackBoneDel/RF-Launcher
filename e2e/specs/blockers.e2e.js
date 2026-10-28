@@ -118,8 +118,18 @@ describe('Fase 3-A.2 sub-ronda 1 — bloqueantes UI → IPC → backend', () => 
         formOpen: !!document.querySelector('[data-testid="edit-save"]'), list };
     }, instanceId))}`);
 
-    await waitForText(`instance-name-${instanceId}`, 'E2E Editada');
-    await waitForText(`instance-version-${instanceId}`, '1.21.1');
+    // WebKitWebDriver en CI devolvió getText vacío pese a un h3 con innerText,
+    // geometría y visibilidad correctos (véase EDIT_TRACE). Comparamos ambos
+    // accesores sobre el mismo elemento, sin depender de la implementación del driver.
+    for (const [testid, expected] of [[`instance-name-${instanceId}`, 'E2E Editada'], [`instance-version-${instanceId}`, '1.21.1']]) {
+      const element = await browser.$(`[data-testid="${testid}"]`);
+      await element.waitForDisplayed({ timeout: 30000 });
+      await browser.waitUntil(async () => (await browser.execute(el => el.textContent, element)).includes(expected), { timeout: 30000 });
+      const driverText = await element.getText();
+      const domText = await browser.execute(el => el.textContent, element);
+      console.log(`EDIT_TEXT_COMPARISON=${JSON.stringify({ testid, driverText, domText })}`);
+      assert.ok(domText.includes(expected));
+    }
     const json = readInstance(instanceId);
     assert.equal(json.name, 'E2E Editada');
     assert.equal(json.minecraftVersion, '1.21.1');

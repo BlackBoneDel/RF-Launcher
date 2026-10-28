@@ -1,4 +1,6 @@
 use std::fs;
+use std::collections::HashSet;
+use std::time::Duration;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -199,24 +201,22 @@ pub async fn resolve(
     // 7. Contexto de sustitución de placeholders (se construye antes de resolver
     //    los argumentos JVM y del juego).
     let game_dir = instances_dir.join(instance_id.to_string()).join("minecraft");
-    let assets_index = version_json
-        .get("assetIndex")
-        .and_then(|v| v.get("id"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("1.20")
-        .to_string();
-    // El índice debe vivir en <assets_root>/indexes/<id>.json (los objetos
-    // los descarga el propio cliente bajo demanda).
-    if let Some(ai) = version_json.get("assetIndex").and_then(|v| v.get("url")) {
-        if let Some(url) = ai.as_str() {
-            let _ = download_file(
-                url,
-                &assets_dir.join("indexes").join(format!("{assets_index}.json")),
-                None,
-            )
-            .await;
-        }
+    let asset_index = version_json.get("assetIndex").ok_or("versión sin assetIndex")?;
+    let assets_index = asset_index.get("id").and_then(Value::as_str).ok_or("assetIndex sin id")?.to_string();
+    if assets_index.is_empty() || assets_index == "." || assets_index == ".." ||
+        !assets_index.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c)) {
+        return Err("id de índice de assets inválido".into());
     }
+    let index_url = asset_index.get("url").and_then(Value::as_str).ok_or("assetIndex sin URL")?;
+    let index_sha = asset_index.get("sha1").and_then(Value::as_str).ok_or("assetIndex sin SHA-1")?;
+    let index_path = assets_dir.join("indexes").join(format!("{assets_index}.json"));
+    // download_file ignora ficheros existentes; validar explícitamente el índice cacheado.
+    if index_path.exists() && !sha1_of_file(&index_path)?.eq_ignore_ascii_case(index_sha) {
+        fs::remove_file(&index_path)?;
+    }
+    download_file(index_url, &index_path, Some(index_sha)).await?;
+    let index: Value = serde_json::from_reader(fs::File::open(index_path)?)?;
+    download_assets(&index, assets_dir, "https://resources.download.minecraft.net").await?;
 
     let ctx = LaunchContext {
         version_name: minecraft_version.to_string(),
@@ -373,6 +373,78 @@ fn classpath_to_string(classpath: &[PathBuf]) -> String {
         .join(sep)
 }
 
+/// Descarga objetos únicos del índice con concurrencia limitada y verifica tanto
+/// caché como descarga antes de publicar. Nunca se confía en el nombre del fichero.
+async fn download_assets(index: &Value, root: &Path, base: &str) -> Result<()> {
+    let objects = index.get("objects").and_then(Value::as_object).ok_or("índice de assets sin objects")?;
+    let mut hashes = HashSet::new();
+    for object in objects.values() {
+        let hash = object.get("hash").and_then(Value::as_str).ok_or("objeto de asset sin hash")?;
+        if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("SHA-1 de asset inválido".into());
+        }
+        hashes.insert(hash.to_ascii_lowercase());
+    }
+    let total = hashes.len();
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(60)).build()?;
+    let mut tasks = tokio::task::JoinSet::new();
+    let mut downloaded = 0usize;
+    let mut cached = 0usize;
+    let mut first_error = None;
+    for hash in hashes {
+        let client = client.clone();
+        let dest = root.join("objects").join(&hash[..2]).join(&hash);
+        let url = format!("{}/{}/{}", base.trim_end_matches('/'), &hash[..2], hash);
+        tasks.spawn(async move { download_asset(&client, &url, &dest, &hash).await });
+        if tasks.len() >= 16 {
+            record_asset_result(tasks.join_next().await, &mut downloaded, &mut cached, &mut first_error);
+        }
+    }
+    while !tasks.is_empty() {
+        record_asset_result(tasks.join_next().await, &mut downloaded, &mut cached, &mut first_error);
+    }
+    if let Some(error) = first_error { return Err(error); }
+    println!("ASSETS_SHA1_VERIFIED total={total} downloaded={downloaded} cached={cached}");
+    Ok(())
+}
+
+fn record_asset_result(result: Option<std::result::Result<Result<bool>, tokio::task::JoinError>>,
+    downloaded: &mut usize, cached: &mut usize, first_error: &mut Option<LauncherError>) {
+    match result {
+        Some(Ok(Ok(true))) => *downloaded += 1,
+        Some(Ok(Ok(false))) => *cached += 1,
+        Some(Ok(Err(error))) => { if first_error.is_none() { *first_error = Some(error); } },
+        Some(Err(error)) => { if first_error.is_none() { *first_error = Some(format!("tarea de asset: {error}").into()); } },
+        None => { if first_error.is_none() { *first_error = Some("tarea de asset ausente".into()); } },
+    }
+}
+
+async fn download_asset(client: &reqwest::Client, url: &str, dest: &Path, expected: &str) -> Result<bool> {
+    if dest.is_file() && sha1_of_file(dest)?.eq_ignore_ascii_case(expected) { return Ok(false); }
+    fs::create_dir_all(dest.parent().ok_or("asset sin directorio")?)?;
+    let tmp = dest.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let result: Result<()> = async {
+        let mut response = client.get(url).send().await?.error_for_status()?;
+        let mut file = fs::File::create(&tmp)?;
+        let mut hasher = Sha1::new();
+        while let Some(chunk) = response.chunk().await? {
+            hasher.update(&chunk);
+            file.write_all(&chunk)?;
+        }
+        drop(file);
+        let actual = hex_encode(&hasher.finalize());
+        if actual != expected { return Err(format!("SHA-1 incorrecto para asset {expected}: {actual}").into()); }
+        // Windows no reemplaza un archivo existente con rename; mantener el
+        // objeto anterior hasta que el temporal haya sido verificado.
+        if dest.exists() { fs::remove_file(dest)?; }
+        fs::rename(&tmp, dest)?;
+        Ok(())
+    }.await;
+    if result.is_err() { let _ = fs::remove_file(&tmp); }
+    result?;
+    Ok(true)
+}
+
 /// Descarga un fichero si no existe localmente, verificando SHA-1 si se provee.
 async fn download_file(url: &str, dest: &Path, sha1: Option<&str>) -> Result<()> {
     if dest.exists() {
@@ -523,6 +595,52 @@ fn now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn assets_validate_cache_and_reject_corruption() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        let payload = b"asset real fixture";
+        let hash = hex_encode(&Sha1::digest(payload));
+        let index = serde_json::json!({"objects": {
+            "one": {"hash": hash}, "duplicate": {"hash": hash}
+        }});
+        let invalid = serde_json::json!({"objects": {"bad": {"hash": "../bad"}}});
+        let temp = std::env::temp_dir().join(format!("rf-assets-{}", uuid::Uuid::new_v4()));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let count = requests.clone();
+        let server = std::thread::spawn(move || {
+            for stream in listener.incoming().take(3) {
+                let mut stream = stream.unwrap();
+                let mut buf = [0; 4096];
+                let _ = stream.read(&mut buf).unwrap();
+                let n = count.fetch_add(1, Ordering::SeqCst);
+                let body: &[u8] = if n < 2 { payload } else { b"incorrect" };
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+        download_assets(&index, &temp, &base).await.unwrap();
+        let dest = temp.join("objects").join(&hash[..2]).join(&hash);
+        assert_eq!(sha1_of_file(&dest).unwrap(), hash);
+        download_assets(&index, &temp, &base).await.unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 1, "caché válido no debe solicitar red");
+        fs::write(&dest, b"corrupt cache").unwrap();
+        download_assets(&index, &temp, &base).await.unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        assert_eq!(sha1_of_file(&dest).unwrap(), hash);
+        fs::write(&dest, b"corrupt cache").unwrap();
+        assert!(download_assets(&index, &temp, &base).await.is_err(), "respuesta con SHA-1 incorrecto debe fallar");
+        assert_eq!(fs::read(&dest).unwrap(), b"corrupt cache", "no publicar descarga incorrecta");
+        assert_eq!(fs::read_dir(dest.parent().unwrap()).unwrap().count(), 1, "temporal eliminado");
+        assert!(download_assets(&invalid, &temp, &base).await.is_err());
+        server.join().unwrap();
+        fs::remove_dir_all(temp).unwrap();
+        println!("ASSET_TEST=HTTP_SHA1_OK CACHE_REUSED CORRUPT_CACHE_REFETCH BAD_SHA_REJECTED");
+    }
 
     #[test]
     fn substitute_replaces_placeholders() {
