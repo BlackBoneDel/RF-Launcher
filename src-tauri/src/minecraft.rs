@@ -59,7 +59,7 @@ pub async fn resolve(
         return resolve_fixture(instances_dir, instance_id);
     }
 
-    if !minecraft_version.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c)) || minecraft_version.is_empty() {
+    if !minecraft_version.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c)) || minecraft_version.is_empty() || minecraft_version == "." || minecraft_version == ".." {
         return Err("versión de Minecraft inválida".into());
     }
     fs::create_dir_all(assets_dir)?;
@@ -168,7 +168,7 @@ pub async fn resolve(
     // Fabric Meta expone un perfil que incluye launcherMeta.libraries (common
     // y client), intermediary y loader, además de la mainClass del cliente.
     let (main_class, jvm_args) = if let Some(loader_version) = fabric_loader {
-        if loader_version.is_empty() || !loader_version.chars().all(|c| c.is_ascii_alphanumeric() || ".-_+".contains(c)) {
+        if loader_version.is_empty() || loader_version == "." || loader_version == ".." || !loader_version.chars().all(|c| c.is_ascii_alphanumeric() || ".-_+".contains(c)) {
             return Err("versión Fabric inválida".into());
         }
         let url = format!("{FABRIC_META}/{minecraft_version}/{loader_version}/profile/json");
@@ -179,7 +179,7 @@ pub async fn resolve(
         for lib in libs {
             let name = lib.get("name").and_then(Value::as_str).ok_or("Fabric sin coordenada Maven")?;
             let parts: Vec<_> = name.split(':').collect();
-            if parts.len() != 3 || parts.iter().any(|p| p.is_empty() || !p.chars().all(|c| c.is_ascii_alphanumeric() || ".-_+".contains(c))) {
+            if parts.len() != 3 || parts.iter().any(|p| p.is_empty() || *p == "." || *p == ".." || !p.chars().all(|c| c.is_ascii_alphanumeric() || ".-_+".contains(c))) {
                 return Err(format!("coordenada Maven inválida: {name}").into());
             }
             let relative = format!("{}/{}/{}/{}-{}.jar", parts[0].replace('.', "/"), parts[1], parts[2], parts[1], parts[2]);

@@ -541,7 +541,7 @@ jobs:
         run: |
           set -e
           npx --yes @tauri-apps/cli@2.12.4 build --ci --no-sign --no-bundle
-          python3 ../scripts/check_release_binary.py target/release/rf-launcher release
+          python3 ../scripts/check_release_binary.py "target/release/RF Launcher" release
 
       - name: Compilar binario E2E con recursos embebidos (NO bundle)
         id: compile_e2e
