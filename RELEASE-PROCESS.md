@@ -28,7 +28,9 @@ Linux. El job de Release **no** se ejecuta en cada push. `src-tauri/Cargo.lock`
 está versionado y CI usa `cargo build --locked --release` /
 `cargo test --locked`; además ejecuta `cargo metadata --locked` antes de
 empaquetar, de modo que una dependencia que fuerce a regenerar el lockfile
-falla la corrida en vez de pasar silenciosamente.
+falla la corrida en vez de pasar silenciosamente. `.gitattributes` fija
+`src-tauri/Cargo.lock` a LF para que el hash sea idéntico incluso en el checkout
+de Windows.
 
 ```bash
 git push origin <rama>
