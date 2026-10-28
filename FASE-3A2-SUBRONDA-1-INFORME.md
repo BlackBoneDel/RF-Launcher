@@ -78,7 +78,7 @@ Sin rediseño visual; sólo cableado funcional y `data-testid`s:
   - Inicia un servidor HTTP fixture de Adoptium.
   - Aísla `XDG_DATA_HOME`.
   - Arranca `tauri-driver`.
-  - Compila/usa `src-tauri/target/debug/rf-launcher` con `--features e2e`.
+  - Compila/usa `src-tauri/target/release/rf-launcher` con `--features e2e`. Release-mode es necesario para que Tauri use `frontend/dist` embebido y no `devUrl`.
 - `specs/blockers.e2e.js`:
   1. Crear instancia desde la UI.
   2. Editar nombre/versión y verificar `instance.json` + UI.

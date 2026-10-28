@@ -38,9 +38,14 @@ describe('Fase 3-A.2 sub-ronda 1 — bloqueantes UI → IPC → backend', () => 
   before(async () => {
     assert.ok(dataRoot, 'XDG_DATA_HOME no fue configurado por wdio.conf.js');
     assert.ok(pidFile, 'RF_LAUNCHER_E2E_PID_FILE no fue configurado');
-    await browser.waitUntil(async () => (await browser.$('body').getText()).includes('Instancias'), {
-      timeout: 30000,
-    });
+    await browser.waitUntil(
+      async () => {
+        const text = await browser.$('body').getText();
+        if (text.length > 0) console.log(`E2E_BODY_HEAD=${text.slice(0, 120).replace(/\n/g, ' | ')}`);
+        return text.includes('Instancias');
+      },
+      { timeout: 60000, timeoutMsg: 'El WebView no mostró la UI de instancias' },
+    );
   });
 
   it('crea una instancia real desde la UI', async () => {

@@ -536,8 +536,8 @@ jobs:
       - name: "Smoke de red real - Mojang v2 + Fabric meta"
         run: python3 scripts/verify_catalog_fixtures.py --live
 
-      - name: Compilar binario E2E (feature flag, NO Release)
-        run: cargo build --locked --features e2e
+      - name: Compilar binario E2E release-mode (feature flag, NO bundle)
+        run: cargo build --locked --release --features e2e
         working-directory: src-tauri
 
       - name: E2E real UI -> IPC -> backend (xvfb)

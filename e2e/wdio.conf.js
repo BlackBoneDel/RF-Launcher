@@ -15,7 +15,7 @@ const fixturePort = Number(process.env.RF_E2E_FIXTURE_PORT || 47831);
 const adoptiumBase = `http://127.0.0.1:${fixturePort}/v3`;
 const templateDir = path.resolve(__dirname, 'fixtures', 'jdk-template');
 const archivePath = path.resolve(repoRoot, '.e2e-jdk.tar.gz');
-const appBinary = path.resolve(repoRoot, 'src-tauri', 'target', 'debug', 'rf-launcher');
+const appBinary = path.resolve(repoRoot, 'src-tauri', 'target', 'release', 'rf-launcher');
 
 let fixtureServer;
 let tauriDriver;
