@@ -533,7 +533,7 @@ jobs:
       - name: Validar fixtures de catálogo (offline)
         run: python3 scripts/verify_catalog_fixtures.py
 
-      - name: Smoke de red real: Mojang v2 + Fabric meta
+      - name: "Smoke de red real - Mojang v2 + Fabric meta"
         run: python3 scripts/verify_catalog_fixtures.py --live
 
       - name: Compilar binario E2E (feature flag, NO Release)
