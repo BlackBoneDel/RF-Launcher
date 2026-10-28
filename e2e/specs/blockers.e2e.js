@@ -48,7 +48,9 @@ describe('Fase 3-A.2 sub-ronda 1 — bloqueantes UI → IPC → backend', () => 
     );
   });
 
-  it('crea una instancia real desde la UI', async () => {
+  beforeEach(async () => {
+    instanceId = undefined;
+    fs.rmSync(pidFile, { force: true });
     await browser.$('[data-testid="new-instance"]').click();
     await browser.$('[data-testid="instance-name"]').setValue('E2E Base');
     await browser.$('[data-testid="minecraft-version"]').setValue('1.21');
@@ -68,11 +70,39 @@ describe('Fase 3-A.2 sub-ronda 1 — bloqueantes UI → IPC → backend', () => 
     assert.equal(json.fabricLoader, null);
   });
 
+  afterEach(async () => {
+    if (fs.existsSync(pidFile)) {
+      const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+      if (pid > 1 && processAlive(pid)) {
+        process.kill(pid, 'SIGKILL');
+        console.log(`E2E_CLEANUP_FIXTURE_PID=${pid}`);
+      }
+    }
+    const cancel = await browser.$('[data-testid="edit-cancel"]');
+    if (await cancel.isDisplayed()) await cancel.click();
+    if (instanceId && fs.existsSync(instanceDir(instanceId))) {
+      const deleteButton = await browser.$(`[data-testid="delete-instance-${instanceId}"]`);
+      await deleteButton.click();
+      await browser.$(`[data-testid="confirm-delete-${instanceId}"]`).click();
+      await browser.waitUntil(() => !fs.existsSync(instanceDir(instanceId)), { timeout: 30000 });
+      await browser.waitUntil(async () => (await browser.$$('[data-testid^="instance-card-"]')).length === 0, { timeout: 30000 });
+    }
+  });
+
+  it('crea una instancia real desde la UI', async () => {
+    assert.equal(readInstance(instanceId).name, 'E2E Base');
+  });
+
   it('B — editar parámetros de una instancia existente persiste y refresca la UI', async () => {
     await browser.$(`[data-testid="edit-instance-${instanceId}"]`).click();
+    console.log(`EDIT_INITIAL_NAME=${await browser.$('[data-testid="edit-name"]').getValue()}`);
     await browser.$('[data-testid="edit-name"]').setValue('E2E Editada');
     await browser.$('[data-testid="edit-minecraft-version"]').setValue('1.21.1');
+    console.log(`EDIT_INPUTS name=${await browser.$('[data-testid="edit-name"]').getValue()} version=${await browser.$('[data-testid="edit-minecraft-version"]').getValue()}`);
     await browser.$('[data-testid="edit-save"]').click();
+    await browser.pause(1000);
+    const result = await browser.$(`[data-testid="launch-message-${instanceId}"]`);
+    console.log(`EDIT_RESULT=${await result.isExisting() ? await result.getText() : '<none>'}`);
 
     await waitForText(`instance-name-${instanceId}`, 'E2E Editada');
     await waitForText(`instance-version-${instanceId}`, '1.21.1');

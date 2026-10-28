@@ -296,10 +296,26 @@ mod tests {
         assert_eq!(first, mojang_fixture().unwrap());
         println!("OFFLINE_NO_CACHE=FIXTURE");
         let good = serde_json::json!({"versions": [{"id": "last-good", "url": "https://example.invalid"}]});
-        cache.write("mojang", &good).unwrap();
+        // Servidor real local que contesta una vez y después cierra el puerto.
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = good.to_string();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let count = stream.read(&mut request).unwrap();
+            assert!(String::from_utf8_lossy(&request[..count]).starts_with("GET /catalog "));
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        });
+        let live_url = format!("http://{addr}/catalog");
+        let fetched = cache.get("mojang", &live_url, MOJANG_FIXTURE).await.unwrap();
+        assert_eq!(fetched, good);
+        server.join().unwrap();
+        println!("CACHE_HTTP_POPULATED=last-good HTTP=200");
         std::thread::sleep(Duration::from_millis(20));
         assert!(cache.read_fresh("mojang").is_none());
-        let second = cache.get("mojang", url, MOJANG_FIXTURE).await.unwrap();
+        let second = cache.get("mojang", &live_url, MOJANG_FIXTURE).await.unwrap();
         assert_eq!(second, good);
         println!("OFFLINE_STALE_CACHE=LAST_GOOD id=last-good");
         fs::remove_dir_all(dir).unwrap();

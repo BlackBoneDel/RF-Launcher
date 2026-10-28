@@ -10,6 +10,8 @@ describe('Minecraft Fabric real — UI, JVM y PID', () => {
   it('intenta lanzar Fabric con JVM gestionada y detener el PID real', async () => {
     let id;
     let pid;
+    let observed;
+    let observer;
     try {
       await browser.$(selector('new-instance')).waitForDisplayed({ timeout: 60000 });
       await browser.$(selector('new-instance')).click();
@@ -25,6 +27,20 @@ describe('Minecraft Fabric real — UI, JVM y PID', () => {
       console.log(`E2E_INSTANCE=${JSON.stringify(config)}`);
       assert.equal(config.minecraftVersion, '1.21.1');
       assert.equal(config.fabricLoader, '0.16.14');
+      observer = setInterval(() => {
+        for (const entry of fs.readdirSync('/proc')) {
+          if (!/^\d+$/.test(entry) || observed) continue;
+          try {
+            const exe = fs.readlinkSync(`/proc/${entry}/exe`);
+            if (!exe.includes('/java/jdk-21/bin/java')) continue;
+            const args = fs.readFileSync(`/proc/${entry}/cmdline`).toString().split('\0').filter(Boolean);
+            if (args.includes('net.fabricmc.loader.impl.launch.knot.KnotClient')) {
+              observed = { pid: Number(entry), exe, args };
+              console.log(`E2E_OBSERVED_JVM=${JSON.stringify(observed)}`);
+            }
+          } catch { /* Process may exit during inspection. */ }
+        }
+      }, 25);
       await browser.$(selector(`launch-instance-${id}`)).click();
       let text = '';
       await browser.waitUntil(async () => {
@@ -38,8 +54,8 @@ describe('Minecraft Fabric real — UI, JVM y PID', () => {
       assert.ok(match, `No se lanzó JVM: ${text}`);
       pid = Number(match[1]);
       const proc = `/proc/${pid}`;
-      const exe = fs.readlinkSync(`${proc}/exe`);
-      const args = fs.readFileSync(`${proc}/cmdline`).toString().split('\0').filter(Boolean);
+      assert.ok(observed && observed.pid === pid, 'No se observó el proceso JVM con el PID reportado');
+      const { exe, args } = observed;
       console.log(`E2E_JVM_PID=${pid} EXE=${exe}`);
       console.log(`E2E_JVM_ARGS=${JSON.stringify(args)}`);
       assert.equal(path.basename(exe), 'java');
@@ -61,8 +77,23 @@ describe('Minecraft Fabric real — UI, JVM y PID', () => {
       console.log(`E2E_JVM_KILL_PID_GONE=${pid}`);
       pid = undefined;
     } finally {
-      if (pid && fs.existsSync(`/proc/${pid}`)) {
-        try { process.kill(pid, 'SIGKILL'); console.log(`E2E_CLEANUP_SIGKILL=${pid}`); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+      clearInterval(observer);
+      if (id) {
+        const logs = path.join(instances, id, 'logs');
+        if (fs.existsSync(logs)) for (const file of fs.readdirSync(logs)) {
+          const content = fs.readFileSync(path.join(logs, file), 'utf8');
+          if (content) console.log(`E2E_DIAGNOSTIC_LOG=${content.slice(0, 6000)}`);
+        }
+      }
+      const cleanupPid = pid || observed?.pid;
+      if (cleanupPid && fs.existsSync(`/proc/${cleanupPid}`)) {
+        try {
+          const exe = fs.readlinkSync(`/proc/${cleanupPid}/exe`);
+          if (exe.includes('/java/jdk-21/bin/java')) {
+            process.kill(cleanupPid, 'SIGKILL');
+            console.log(`E2E_CLEANUP_SIGKILL=${cleanupPid}`);
+          }
+        } catch (error) { if (error.code !== 'ESRCH' && error.code !== 'ENOENT') throw error; }
       }
     }
   });

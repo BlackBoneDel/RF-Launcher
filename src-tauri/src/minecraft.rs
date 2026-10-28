@@ -245,7 +245,7 @@ pub async fn resolve(
 
     // 6. Argumentos JVM: quitar flags de memoria existentes (nosotros los ponemos al lanzar).
     //    Se resuelven con el contexto real para que ${natives_directory} etc. se sustituyan.
-    let mut jvm_args_all: Vec<String> = version_json
+    let jvm_args_all: Vec<String> = version_json
         .get("arguments")
         .and_then(|a| a.get("jvm"))
         .and_then(|v| v.as_array())

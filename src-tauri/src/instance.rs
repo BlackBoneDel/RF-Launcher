@@ -338,6 +338,7 @@ mod tests {
         let dir = Instance::dir(&root, &id);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("instance.json"), "intact").unwrap();
+        fs::write(dir.join("already-deleted"), "delete me").unwrap();
         let failed = Instance::delete_with(&root, &id,
             |_, _| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "simulated rename failure")),
             |_| panic!("remove must not run"));
@@ -346,13 +347,17 @@ mod tests {
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         println!("DELETE_RENAME_FAILURE=ORIGINAL_INTACT NO_TRASH");
         let failed = Instance::delete_with(&root, &id, |a, b| fs::rename(a, b),
-            |_| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "simulated cleanup failure")));
+            |trash| {
+                fs::remove_file(trash.join("already-deleted"))?;
+                Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "simulated mid-cleanup failure"))
+            });
         assert!(failed.is_err());
         assert!(!dir.exists());
         let trash = fs::read_dir(&root).unwrap().next().unwrap().unwrap().path();
         assert!(trash.file_name().unwrap().to_string_lossy().starts_with(".trash-"));
         assert_eq!(fs::read_to_string(trash.join("instance.json")).unwrap(), "intact");
-        println!("DELETE_CLEANUP_FAILURE=ISOLATED_TRASH ERROR_REPORTED");
+        assert!(!trash.join("already-deleted").exists());
+        println!("DELETE_CLEANUP_FAILURE=ISOLATED_TRASH FILE_DELETED OTHER_FILE_REMAINS ERROR_REPORTED");
         fs::remove_dir_all(root).unwrap();
     }
 

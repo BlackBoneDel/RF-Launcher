@@ -536,7 +536,15 @@ jobs:
       - name: "Smoke de red real - Mojang v2 + Fabric meta"
         run: python3 scripts/verify_catalog_fixtures.py --live
 
+      - name: Inspeccionar binario Release sin feature E2E
+        working-directory: src-tauri
+        run: |
+          set -e
+          npx --yes @tauri-apps/cli@2.12.4 build --ci --no-sign --no-bundle
+          python3 ../scripts/check_release_binary.py target/release/rf-launcher release
+
       - name: Compilar binario E2E con recursos embebidos (NO bundle)
+        id: compile_e2e
         run: |
           test -s ../frontend/dist/index.html
           echo "E2E_DIST_INDEX_SHA256=$(sha256sum ../frontend/dist/index.html)"
@@ -544,6 +552,7 @@ jobs:
           echo "E2E_TAURI_ENV_DEBUG=${TAURI_ENV_DEBUG-<unset>}"
           cargo tree --locked --features e2e,custom-protocol -e features -i tauri | grep -E 'custom-protocol|rf-launcher'
           cargo build --locked --release --features e2e,custom-protocol
+          python3 ../scripts/check_release_binary.py target/release/rf-launcher e2e
         working-directory: src-tauri
 
       - name: Intento E2E Minecraft Fabric y JVM reales
@@ -557,6 +566,7 @@ jobs:
         working-directory: e2e
 
       - name: E2E real UI -> IPC -> backend (xvfb)
+        if: always() && steps.compile_e2e.outcome == 'success'
         env:
           RUST_BACKTRACE: "1"
           TAURI_DRIVER: /home/runner/.cargo/bin/tauri-driver
