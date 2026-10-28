@@ -29,7 +29,7 @@
 
 ### Linux
 
-- [ ] Instalar el `.deb`: `sudo apt install ./RF-Launcher-*.deb`.
+- [ ] Instalar el `.deb`: `sudo apt install ./linux-x86_64-RF-Launcher_0.1.0_amd64.deb`.
 - [ ] Abrir RF Launcher desde el menú de aplicaciones o ejecutarlo desde terminal.
 - [ ] Confirmar que el icono del escritorio y el nombre aparecen correctamente.
 

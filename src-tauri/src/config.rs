@@ -67,12 +67,6 @@ impl ConfigValue {
             _ => None,
         }
     }
-    pub fn as_bool(&self) -> Option<bool> {
-        match self {
-            ConfigValue::Bool(v) => Some(*v),
-            _ => None,
-        }
-    }
     pub fn as_string(&self) -> Option<&str> {
         match self {
             ConfigValue::String(v) => Some(v),
@@ -112,25 +106,12 @@ impl ConfigEngine {
         })
     }
 
-    pub fn data_dir(&self) -> &PathBuf {
-        &self.data_dir
-    }
-
     /// Guarda la configuración global en disco.
     pub fn save_global(&self) -> Result<()> {
         let global = self.global.lock().map_err(|e| LauncherError::Custom(e.to_string()))?;
         let json = serde_json::to_string_pretty(&*global)?;
         fs::write(self.data_dir.join("config.json"), json)?;
         Ok(())
-    }
-
-    pub fn global_overrides(&self) -> Result<HashMap<String, ConfigValue>> {
-        Ok(self
-            .global
-            .lock()
-            .map_err(|e| LauncherError::Custom(e.to_string()))?
-            .overrides
-            .clone())
     }
 
     pub fn set_global(&self, key: ConfigKey, value: ConfigValue) -> Result<()> {
@@ -174,8 +155,23 @@ pub fn resolve_theme(engine: &ConfigEngine) -> Result<String> {
 }
 
 #[cfg(test)]
+impl ConfigEngine {
+    /// Mutación deliberada para el test de persistencia: actualiza la memoria
+    /// pero NO llama a `save_global()`. Permite demostrar que el test falla
+    /// cuando se rompe la ruta de escritura, sin tocar producción.
+    fn set_global_without_persisting(&self, key: ConfigKey, value: ConfigValue) {
+        self.global
+            .lock()
+            .expect("mutex de configuración envenenado")
+            .overrides
+            .insert(key.as_str().to_string(), value);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn empty_overrides() -> HashMap<String, ConfigValue> {
         HashMap::new()
@@ -235,6 +231,62 @@ mod tests {
         // RamMaxMb por defecto del sistema
         let value = engine.resolve(&overrides, ConfigKey::RamMaxMb);
         assert_eq!(value, ConfigValue::Int(2048));
+    }
+
+    fn unique_config_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "rf-launcher-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn theme_persists_across_engine_restart() {
+        let dir = unique_config_dir("theme-persist");
+        let engine = ConfigEngine::new(dir.clone()).unwrap();
+
+        engine
+            .set_global(ConfigKey::Theme, ConfigValue::String("dark".into()))
+            .unwrap();
+        let reopened = ConfigEngine::new(dir.clone()).unwrap();
+        assert_eq!(resolve_theme(&reopened).unwrap(), "dark");
+
+        reopened
+            .set_global(ConfigKey::Theme, ConfigValue::String("light".into()))
+            .unwrap();
+        let reopened_again = ConfigEngine::new(dir.clone()).unwrap();
+        assert_eq!(resolve_theme(&reopened_again).unwrap(), "light");
+        println!("THEME_PERSISTENCE_OK: dark y light sobreviven al reinicio del motor");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[should_panic(expected = "persistencia rota: el tema no sobrevivió al reinicio")]
+    fn theme_persistence_fails_when_save_is_skipped() {
+        let dir = unique_config_dir("theme-mutation");
+        let engine = ConfigEngine::new(dir.clone()).unwrap();
+
+        // Mutación real del camino de persistencia: se omite save_global().
+        engine.set_global_without_persisting(
+            ConfigKey::Theme,
+            ConfigValue::String("dark".into()),
+        );
+        println!("MUTATION_CONTROL: save_global() omitido; se espera panic");
+
+        let reopened = ConfigEngine::new(dir.clone()).unwrap();
+        assert_eq!(
+            resolve_theme(&reopened).unwrap(),
+            "dark",
+            "persistencia rota: el tema no sobrevivió al reinicio"
+        );
     }
 
     #[test]

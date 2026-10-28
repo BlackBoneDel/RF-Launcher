@@ -64,10 +64,11 @@ data/
 ```
 
 El identificador es un **UUID inmutable**: el nombre visible puede cambiar sin
-romper referencias. `templateOrigin` se serializa como `null` en esta fase.
+romper referencias. `templateOrigin` se serializa como `null` en esta fase y,
+hasta que exista un flujo de plantillas, no se muestra en la UI.
 
-**Convención del cable y del disco:** las cinco structs IPC (`Instance`,
-`InstanceSummary`, `RamCheck`, `LaunchResult`, `KillResult`) serializan todos
+**Convención del cable y del disco:** las cuatro structs IPC (`Instance`,
+`RamCheck`, `LaunchResult`, `KillResult`) serializan todos
 sus campos en camelCase. Los `instance.json` nuevos también usan camelCase;
 cada campo antes snake_case conserva un `#[serde(alias = "...")]` para leer
 ficheros escritos por versiones anteriores sin migración. La guardia
@@ -158,12 +159,13 @@ sesión. Persistir PIDs entre sesiones queda para una fase posterior.
 cd frontend && npm ci && npm run build
 
 # Backend (requiere toolchain Rust + librerías de sistema de Tauri 2)
-cd src-tauri && cargo build --release && cargo test
+cd src-tauri && cargo build --locked --release && cargo test --locked
 ```
 
 El workflow `.github/workflows/ci.yml` ejecuta la matriz
 `windows-latest` / `macos-latest` / `ubuntu-24.04` con build del frontend,
-`cargo build --release`, `cargo test`, un smoke test de descarga real de Java 21
+`cargo build --locked --release`, `cargo test --locked` (con `Cargo.lock`
+versionado), un smoke test de descarga real de Java 21
 desde Adoptium en los 3 SO, smoke estricto de arranque de la app en los 3 SO y
 la medición de la línea base de RAM en reposo.
 

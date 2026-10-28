@@ -225,7 +225,7 @@ pub async fn set_instance_config(
 }
 
 #[tauri::command]
-pub async fn get_system_ram(state: State<'_, AppState>) -> Result<RamCheck> {
+pub async fn get_system_ram() -> Result<RamCheck> {
     let total = total_ram_mb();
     Ok(RamCheck {
         total_mb: total,

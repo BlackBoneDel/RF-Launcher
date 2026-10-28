@@ -14,7 +14,7 @@ use crate::error::{LauncherError, Result};
 /// El identificador (UUID) es inmutable y es la clave de referencia; el nombre
 /// visible puede cambiar sin romper nada. `template_origin` existe para fases
 /// futuras (plantillas preconfiguradas, ej. "rf-client-default"); en esta fase
-/// siempre se persiste como null.
+/// siempre se persiste como null y, por ahora, no se muestra en la UI.
 ///
 /// CONVENCIÓN IPC (issue #6): todos los campos serializados usan camelCase.
 /// Cada campo que antes salía en snake_case conserva un `alias` para poder
@@ -45,60 +45,15 @@ pub struct Instance {
     pub last_launched_at: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InstanceSummary {
-    pub id: String,
-    pub name: String,
-    #[serde(alias = "minecraft_version")]
-    pub minecraft_version: String,
-    #[serde(alias = "fabric_loader")]
-    pub fabric_loader: Option<String>,
-    #[serde(alias = "template_origin")]
-    pub template_origin: Option<String>,
-    #[serde(alias = "ram_min_mb")]
-    pub ram_min_mb: Option<u64>,
-    #[serde(alias = "ram_max_mb")]
-    pub ram_max_mb: Option<u64>,
-    #[serde(alias = "created_at")]
-    pub created_at: u64,
-    #[serde(alias = "last_launched_at")]
-    pub last_launched_at: Option<u64>,
-}
-
 impl Instance {
     /// Carpeta de la instancia en disco: data_dir/instances/<uuid>/
     pub fn dir(instances_dir: &Path, id: &Uuid) -> PathBuf {
         instances_dir.join(id.to_string())
     }
 
-    /// Carpeta de datos del juego de esta instancia (`.minecraft` aislado).
-    pub fn game_dir(&self, instances_dir: &Path) -> PathBuf {
-        Self::dir(instances_dir, &self.id).join("minecraft")
-    }
-
-    /// Carpeta de logs de lanzamientos de esta instancia.
-    pub fn logs_dir(&self, instances_dir: &Path) -> PathBuf {
-        Self::dir(instances_dir, &self.id).join("logs")
-    }
-
     /// Ruta del fichero de persistencia de la instancia.
     pub fn config_path(&self, instances_dir: &Path) -> PathBuf {
         Self::dir(instances_dir, &self.id).join("instance.json")
-    }
-
-    pub fn summary(&self) -> InstanceSummary {
-        InstanceSummary {
-            id: self.id.to_string(),
-            name: self.name.clone(),
-            minecraft_version: self.minecraft_version.clone(),
-            fabric_loader: self.fabric_loader.clone(),
-            template_origin: self.template_origin.clone(),
-            ram_min_mb: self.ram_min_mb,
-            ram_max_mb: self.ram_max_mb,
-            created_at: self.created_at,
-            last_launched_at: self.last_launched_at,
-        }
     }
 
     /// Crea una instancia nueva y la persiste en disco.
@@ -247,11 +202,6 @@ mod tests {
             "el cable NO debe usar snake_case: {obj:?}"
         );
 
-        // `InstanceSummary` debe usar la misma convención.
-        let summary = serde_json::to_value(inst.summary()).unwrap();
-        assert_eq!(summary["templateOrigin"], "plantilla-ejemplo");
-        assert!(!summary.as_object().unwrap().contains_key("template_origin"));
-
         // El alias permite leer ficheros escritos con el nombre antiguo.
         let mut legacy = obj.clone();
         legacy.remove("templateOrigin");
@@ -317,56 +267,6 @@ mod tests {
         assert_eq!(back.ram_max_mb, Some(8192));
         assert_eq!(back.created_at, 1);
         assert_eq!(back.last_launched_at, Some(2));
-    }
-
-    #[test]
-    fn instance_summary_wire_fields_are_camel_case_and_legacy_aliases_work() {
-        let inst = Instance {
-            id: Uuid::new_v4(),
-            name: "summary".into(),
-            minecraft_version: "1.21".into(),
-            fabric_loader: None,
-            template_origin: Some("plantilla".into()),
-            config_overrides: HashMap::new(),
-            ram_min_mb: Some(1024),
-            ram_max_mb: Some(2048),
-            created_at: 3,
-            last_launched_at: None,
-        };
-
-        let obj = serde_json::to_value(inst.summary()).unwrap();
-        let keys: Vec<&str> = obj.as_object().unwrap().keys().map(String::as_str).collect();
-        assert_eq!(obj["minecraftVersion"], "1.21");
-        assert_eq!(obj["fabricLoader"], serde_json::Value::Null);
-        assert_eq!(obj["templateOrigin"], "plantilla");
-        assert_eq!(obj["ramMinMb"], 1024);
-        assert_eq!(obj["ramMaxMb"], 2048);
-        assert_eq!(obj["createdAt"], 3);
-        assert_eq!(obj["lastLaunchedAt"], serde_json::Value::Null);
-        assert!(
-            keys.iter().all(|k| !k.contains('_')),
-            "ninguna clave del cable puede ser snake_case: {keys:?}"
-        );
-
-        let legacy = serde_json::json!({
-            "id": inst.id.to_string(),
-            "name": "legacy-summary",
-            "minecraft_version": "1.20.4",
-            "fabric_loader": "0.15.0",
-            "template_origin": "legacy-template",
-            "ram_min_mb": 256,
-            "ram_max_mb": 1024,
-            "created_at": 4,
-            "last_launched_at": 5
-        });
-        let back: InstanceSummary = serde_json::from_value(legacy).unwrap();
-        assert_eq!(back.minecraft_version, "1.20.4");
-        assert_eq!(back.fabric_loader.as_deref(), Some("0.15.0"));
-        assert_eq!(back.template_origin.as_deref(), Some("legacy-template"));
-        assert_eq!(back.ram_min_mb, Some(256));
-        assert_eq!(back.ram_max_mb, Some(1024));
-        assert_eq!(back.created_at, 4);
-        assert_eq!(back.last_launched_at, Some(5));
     }
 
     #[test]

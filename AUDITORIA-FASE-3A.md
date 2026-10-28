@@ -10,6 +10,13 @@
 > puede confirmar con `force`. Las secciones que describen Tauri 1, el cable
 > mixto o `Warn` al 100 % son históricas. La fuente normativa vigente es
 > `README.md` junto al código; este documento se conserva como registro.
+>
+> **Actualización Quick Wins (pre-Fase 3-B):** el estado vigente tiene
+> **37 tests en código** (35 unitarios por job + 2 smoke de red), runner
+> `ubuntu-24.04`, `Cargo.lock` versionado con `--locked`, test de persistencia de
+> tema con control de mutación y UI sin `templateOrigin` visible. `InstanceSummary`
+> se eliminó como código muerto; las menciones a 5 structs, 27/29 tests y
+> `ubuntu-22.04` en las secciones siguientes son históricas.
 
 ---
 
@@ -22,7 +29,7 @@ Se añadieron 4 commits de código/CI (+ este informe) y 2 tests nuevos (27 → 
 CI del código: **verde en los 3 SO** ([40244256181](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40244256181)); corrida definitiva del cierre: ver §13.
 Decisión Tauri 1 → Tauri 2: **recomendada pero NO ejecutada en esta auditoría**; ejecutada después en el PR de deuda técnica (ver nota de actualización).
 Decisión del límite de RAM al 100%: **pendiente en esta auditoría**; resuelta después con `>=` (ver nota de actualización y C.3).
-`ubuntu-22.04` tiene fecha de retirada **2027-04-17** — esto convierte Tauri 2 en urgente, no opcional.
+`ubuntu-22.04` (histórico; ya se usa `ubuntu-24.04`) tiene fecha de retirada **2027-04-17** — esto convirtió Tauri 2 en urgente.
 Hallazgos nuevos no pedidos: 6 (ver §12), dos de ellos bugs funcionales en el cable Rust↔TS.
 
 ---
@@ -106,7 +113,7 @@ $ git rev-list --count HEAD..origin/arena/2412f038-rf-launcher  -> 0
 
 **Respuesta:** sí, Tauri 2 desbloquea 24.04. Pero **no** recomiendo volver a `ubuntu-latest` sin más: es una etiqueta móvil. Recomiendo fijar `ubuntu-24.04` y añadir 26.04 como job secundario cuando se confirme el paquete.
 
-### B.3 — Riesgo de deprecación de `ubuntu-22.04` (crudo)
+### B.3 — Riesgo de deprecación de `ubuntu-22.04` (histórico)
 
 [runner-images#14254](https://github.com/actions/runner-images/issues/14254), abierto 2026-06-16, texto literal:
 
@@ -390,10 +397,10 @@ El mismo atributo se aplicó a `InstanceSummary` para que no haya dos convencion
 `template_origin_wire_field_is_exactly_template_origin_camel_case` en `src-tauri/src/instance.rs`:
 - `obj["templateOrigin"] == "plantilla-ejemplo"`;
 - `assert!(!obj.contains_key("template_origin"))` — **falla si alguien quita el atributo**;
-- mismo assert sobre `InstanceSummary`;
+- mismo assert sobre `InstanceSummary` (histórico; esa struct se eliminó después por código muerto);
 - deserializa un JSON *legacy* con `template_origin` y comprueba que el `alias` lo lee.
 
-Además `instance_serializes_template_origin_as_null` se actualizó para leer `parsed["templateOrigin"]`. Ambos pasan en los 3 SO (27 tests por job).
+Además `instance_serializes_template_origin_as_null` se actualizó para leer `parsed["templateOrigin"]`. Ambos pasaban en los 3 SO en esa auditoría (27 tests por job, recuento histórico).
 
 ### F.5 — Corrección adicional del mismo cable (ver §12)
 
@@ -500,9 +507,9 @@ No hubo que extenderlos. Se reforzó la categoría añadiendo `http_retries_are_
 
 ---
 
-## 10. Parte I — Inventario completo de tests (29)
+## 10. Parte I — Inventario histórico de tests (29)
 
-Tras la auditoría hay **29 tests** (27 originales + 2 nuevos marcados 🆕). Cobertura: `W` = Windows, `M` = macOS, `L` = Ubuntu/Linux. Los tests de red se ejecutan en un paso de smoke aparte (todos excluidos de la corrida unitaria principal con `--skip`).
+En esta auditoría había **29 tests** (27 originales + 2 nuevos marcados 🆕). El estado vigente tiene 37 tests; ver nota de Quick Wins al inicio. Cobertura: `W` = Windows, `M` = macOS, `L` = Ubuntu/Linux. Los tests de red se ejecutan en un paso de smoke aparte (todos excluidos de la corrida unitaria principal con `--skip`).
 
 | # | Test | Archivo | Invariante | SO |
 |---|---|---|---|---|
@@ -568,7 +575,7 @@ Con evidencia real de los 3, y **asumirlo me habría costado el hallazgo**: en e
 | N-3 | **Sin reintentos HTTP**, pese a ser requisito de la fase. Un fallo transitorio en macOS arm64 (run 40242984273) tumbó el smoke test. | **Alta** | ✅ `send_with_retries()` (3 intentos, backoff, log por intento) + test offline. |
 | N-4 | **Aviso de RAM global incompletable.** `set_global_config` devolvía `RamCheck{ok:false, warning}` pero no tenía parámetro `force`, así que el usuario nunca podía confirmar >80%; `SettingsView` además descartaba el `RamCheck` (wrapper declaraba `Promise<void>`). | Media | ✅ Añadido `force` al comando, wrapper tipado a `RamCheck`, UI con botón de confirmación. |
 | N-5 | **`App.tsx` duplica la capa IPC.** 4 llamadas `invoke` directas (`get_theme`, `list_instances`, `set_theme`, `create_instance`) que ya tienen wrapper en `lib/tauri.ts`, rompiendo la regla "una sola frontera". | Baja | ⚠️ Reportado, no corregido (cambio de refactor; barato pero no necesario para esta auditoría). Recomendable antes de 3-B. |
-| N-6 | **Convención de cable mixta** en respuestas: `templateOrigin` camelCase junto a 8 campos snake_case. | Media | ⚠️ **Pendiente en la auditoría; resuelto después**: `#[serde(rename_all = "camelCase")]` en las 5 structs IPC, TS actualizado y `#[serde(alias)]` para leer ficheros antiguos. Ver guardia `scripts/check_ipc_camel_case.py`. |
+| N-6 | **Convención de cable mixta** en respuestas: `templateOrigin` camelCase junto a 8 campos snake_case. | Media | ⚠️ **Pendiente en la auditoría; resuelto después**: `#[serde(rename_all = "camelCase")]` en 4 structs IPC tras eliminar `InstanceSummary`, TS actualizado y `#[serde(alias)]` para leer ficheros antiguos. Ver guardia `scripts/check_ipc_camel_case.py`. |
 
 Además, dos limitaciones de medición ya consignadas en §6/E.3 y §6/E.4: el árbol de procesos de Windows es una cota inferior, y la RAM en reposo es un único muestreo por SO.
 

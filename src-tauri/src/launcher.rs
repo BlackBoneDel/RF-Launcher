@@ -15,7 +15,6 @@ use crate::ram::process_exists;
 pub struct RunningInstance {
     pub child: Child,
     pub pid: u32,
-    pub log_path: PathBuf,
 }
 
 /// Gestor de procesos de juego lanzados.
@@ -32,20 +31,14 @@ pub struct RunningInstance {
 /// queda como zombi y `sysinfo` seguiría listándolo, haciendo imposible
 /// verificar de verdad que "matar instancia" funcionó.
 pub struct Launcher {
-    instances_dir: PathBuf,
     pub running: HashMap<Uuid, RunningInstance>,
 }
 
 impl Launcher {
-    pub fn new(instances_dir: PathBuf) -> Self {
+    pub fn new() -> Self {
         Self {
-            instances_dir,
             running: HashMap::new(),
         }
-    }
-
-    pub fn instances_dir(&self) -> &Path {
-        &self.instances_dir
     }
 
     /// Lanza el proceso real de Java con los argumentos ya resueltos.
@@ -95,11 +88,7 @@ impl Launcher {
 
         self.running.insert(
             instance.id,
-            RunningInstance {
-                child,
-                pid,
-                log_path,
-            },
+            RunningInstance { child, pid },
         );
         Ok(pid)
     }
@@ -146,9 +135,6 @@ impl Launcher {
         }
     }
 
-    pub fn running_pids(&self) -> Vec<u32> {
-        self.running.values().map(|s| s.pid).collect()
-    }
 }
 
 /// Resultado de detener una instancia.
@@ -246,7 +232,7 @@ mod tests {
 
     #[test]
     fn kill_unknown_instance_returns_not_terminated() {
-        let mut launcher = Launcher::new(temp_dir().join("rf-launcher-test-kill"));
+        let mut launcher = Launcher::new();
         let id = Uuid::new_v4();
         let result = launcher.kill(&id);
         assert!(result.ok);

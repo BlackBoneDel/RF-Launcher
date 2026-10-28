@@ -36,11 +36,6 @@ jobs:
     # El tag build-v* y workflow_dispatch son disparadores de Release: no
     # duplican la matriz de tests, que ya se ejecutó en el push/PR del código.
     if: github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/build-v'))
-    # Permiso temporal para publicar Cargo.lock como check-run; se retira en el
-    # commit final, cuando el lockfile ya esté versionado.
-    permissions:
-      contents: read
-      checks: write
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -101,18 +96,32 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      - name: Verificar Cargo.lock congelado
+        shell: bash
+        working-directory: src-tauri
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          digest = hashlib.sha256(Path("Cargo.lock").read_bytes()).hexdigest()
+          print(f"::notice title=evidence-cargo-lock::CARGO_LOCK_SHA256={digest}")
+          PY
+          cargo metadata --locked --format-version 1 > /dev/null
+          echo "CARGO_LOCKED=OK"
+
       - name: Type-check y build del frontend (Vite)
         run: npm run build
         working-directory: frontend
 
       - name: Build del backend Rust (release)
-        run: cargo build --release 2>&1 | tee cargo_build.log
+        run: cargo build --locked --release 2>&1 | tee cargo_build.log
         working-directory: src-tauri
 
       - name: Tests unitarios de Rust (config, instancia, RAM, mapeo Java)
         run: |
           set -o pipefail
-          cargo test -- --nocapture \
+          cargo test --locked -- --nocapture \
             --skip ensure_java_21_downloads_from_adoptium \
             --skip mojang_manifest_major_version_matches_static_table \
             2>&1 | tee cargo_test.log
@@ -163,7 +172,7 @@ jobs:
       - name: Smoke test de descarga real de JDK 21 desde Adoptium (3 SO)
         run: |
           set -o pipefail
-          cargo test ensure_java_21_downloads_from_adoptium -- --nocapture 2>&1 | tee cargo_smoke.log
+          cargo test --locked ensure_java_21_downloads_from_adoptium -- --nocapture 2>&1 | tee cargo_smoke.log
         working-directory: src-tauri
 
       # El manifiesto de Mojang es JSON independiente de la plataforma; se
@@ -172,78 +181,8 @@ jobs:
         if: "runner.os == 'Linux'"
         run: |
           set -o pipefail
-          cargo test mojang_manifest_major_version_matches_static_table -- --nocapture 2>&1 | tee cargo_smoke_mojang.log
+          cargo test --locked mojang_manifest_major_version_matches_static_table -- --nocapture 2>&1 | tee cargo_smoke_mojang.log
         working-directory: src-tauri
-
-      # Paso TEMPORAL: crea un check-run con el Cargo.lock comprimido en LZMA.
-      # La API de check-runs admite anotaciones largas; el comando ::notice no.
-      - name: Publicar Cargo.lock generado por CI (temporal)
-        if: "runner.os == 'Linux' && github.event_name == 'push'"
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 - <<'PY'
-          import base64
-          import hashlib
-          import json
-          import lzma
-          import os
-          import urllib.request
-          from datetime import datetime, timezone
-          from pathlib import Path
-
-          repo = os.environ["GITHUB_REPOSITORY"]
-          sha = os.environ["GITHUB_SHA"]
-          token = os.environ["GH_TOKEN"]
-          raw = Path("src-tauri/Cargo.lock").read_bytes()
-          compressed = lzma.compress(raw, preset=9)
-          encoded = base64.b64encode(compressed).decode("ascii")
-          chunk_size = 60000
-          total = (len(encoded) + chunk_size - 1) // chunk_size
-          digest = hashlib.sha256(raw).hexdigest()
-          now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-          annotations = []
-          for index in range(total):
-              chunk = encoded[index * chunk_size:(index + 1) * chunk_size]
-              message = f"{index}|{total}|{chunk}"
-              if len(message) > 65000:
-                  raise SystemExit("anotacion demasiado larga")
-              annotations.append({
-                  "path": ".github/workflows/ci.yml",
-                  "start_line": 1,
-                  "end_line": 1,
-                  "annotation_level": "notice",
-                  "message": message,
-              })
-          payload = {
-              "name": "cargo-lock-transfer",
-              "head_sha": sha,
-              "status": "completed",
-              "conclusion": "success",
-              "started_at": now,
-              "completed_at": now,
-              "output": {
-                  "title": "Cargo.lock transfer",
-                  "summary": f"SHA256={digest};BYTES={len(raw)};LZMA_BYTES={len(compressed)};B64_LEN={len(encoded)};TOTAL={total}",
-                  "annotations": annotations,
-              },
-          }
-          request = urllib.request.Request(
-              f"https://api.github.com/repos/{repo}/check-runs",
-              data=json.dumps(payload).encode(),
-              headers={
-                  "Accept": "application/vnd.github+json",
-                  "Authorization": f"Bearer {token}",
-                  "Content-Type": "application/json",
-                  "X-GitHub-Api-Version": "2022-11-28",
-              },
-              method="POST",
-          )
-          with urllib.request.urlopen(request) as response:
-              result = json.load(response)
-          print(f"::notice title=cargo-lock-transfer::CHECK_RUN_ID={result['id']};SUMMARY={payload['output']['summary']}")
-          PY
 
       # ---------------- Línea base de RAM en reposo, los 3 SO ----------------
       # Cada SO escribe el MISMO fichero clave=valor: src-tauri/ram_baseline.txt
@@ -444,7 +383,7 @@ jobs:
               markers = [l for l in lines if re.search(
                   r"(ADOPTIUM_SMOKE|ADOPTIUM_API|ADOPTIUM_DOWNLOAD|MOJANG_SMOKE|"
                   r"RETRY_TEST|KILL_TEST_CHILD_RSS_KB|RAM_FISICA_MB|"
-                  r"kill_really_terminates|truncated_download|interrupted_install)", l)]
+                  r"kill_really_terminates|truncated_download|interrupted_install|THEME_PERSISTENCE|MUTATION_CONTROL)", l)]
               notice("evidence-tests", f"[{p}]\n" + "\n".join((results + failed[:8] + markers[:14]) or ["sin datos"]))
               phys = [l for l in lines if "RAM_FISICA_MB=" in l]
               if phys:
@@ -609,6 +548,11 @@ jobs:
       - name: Instalar dependencias de frontend
         run: npm ci
         working-directory: frontend
+
+      - name: Verificar Cargo.lock antes de empaquetar
+        shell: bash
+        working-directory: src-tauri
+        run: cargo metadata --locked --format-version 1 > /dev/null
 
       - name: Build obligatorio de instalador Tauri 2
         shell: bash
@@ -809,7 +753,7 @@ jobs:
               '- **Fase 3-B aún no iniciada**: no hay mod loaders adicionales, mods, modpacks,',
               '  cuentas, OAuth ni integración con el mod hermano.',
               '- No hay firma de código ni notarización: SmartScreen/Gatekeeper pueden avisar.',
-              '- No se ha executado una instalación interactiva en un sistema limpio desde CI;',
+              '- No se ha ejecutado una instalación interactiva en un sistema limpio desde CI;',
               '  eso se cubre con la checklist manual del Release.',
               '',
               '## Assets y SHA-256',

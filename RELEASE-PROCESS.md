@@ -24,7 +24,11 @@ avanzó, el Release falla en vez de apuntar silenciosamente a otro commit.
 ## 2. Verificación normal
 
 Todo push/PR sigue ejecutando la matriz `build-and-test` en Windows, macOS y
-Linux. El job de Release **no** se ejecuta en cada push.
+Linux. El job de Release **no** se ejecuta en cada push. `src-tauri/Cargo.lock`
+está versionado y CI usa `cargo build --locked --release` /
+`cargo test --locked`; además ejecuta `cargo metadata --locked` antes de
+empaquetar, de modo que una dependencia que fuerce a regenerar el lockfile
+falla la corrida en vez de pasar silenciosamente.
 
 ```bash
 git push origin <rama>

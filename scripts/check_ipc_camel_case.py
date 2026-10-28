@@ -17,7 +17,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STRUCTS = {
     "Instance": "src-tauri/src/instance.rs",
-    "InstanceSummary": "src-tauri/src/instance.rs",
     "RamCheck": "src-tauri/src/commands.rs",
     "LaunchResult": "src-tauri/src/commands.rs",
     "KillResult": "src-tauri/src/launcher.rs",
