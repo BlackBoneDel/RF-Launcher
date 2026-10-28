@@ -26,6 +26,7 @@ default = []
 # Hooks de prueba compilados SOLO en el job E2E de Linux. El binario de Release
 # no incluye ni plugins WDIO ni atajos de red.
 e2e = []
+custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

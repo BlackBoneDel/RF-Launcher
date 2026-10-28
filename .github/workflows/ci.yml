@@ -536,8 +536,14 @@ jobs:
       - name: "Smoke de red real - Mojang v2 + Fabric meta"
         run: python3 scripts/verify_catalog_fixtures.py --live
 
-      - name: Compilar binario E2E release-mode (feature flag, NO bundle)
-        run: cargo build --locked --release --features e2e
+      - name: Compilar binario E2E con recursos embebidos (NO bundle)
+        run: |
+          test -s ../frontend/dist/index.html
+          echo "E2E_DIST_INDEX_SHA256=$(sha256sum ../frontend/dist/index.html)"
+          find ../frontend/dist -type f -printf 'E2E_DIST_FILE=%p %s bytes\n'
+          echo "E2E_TAURI_ENV_DEBUG=${TAURI_ENV_DEBUG-<unset>}"
+          cargo tree --locked --features e2e,custom-protocol -e features -i tauri | grep -E 'custom-protocol|rf-launcher'
+          cargo build --locked --release --features e2e,custom-protocol
         working-directory: src-tauri
 
       - name: E2E real UI -> IPC -> backend (xvfb)

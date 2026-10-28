@@ -178,7 +178,10 @@ pub async fn delete_instance(state: State<'_, AppState>, id: String) -> Result<(
         .launcher
         .lock()
         .map_err(|e| LauncherError::Custom(e.to_string()))?;
-    let _ = launcher.kill(&uuid);
+    let result = launcher.kill(&uuid);
+    if !result.ok {
+        return Err(LauncherError::Custom(result.error.unwrap_or_else(|| "No se pudo detener la instancia".into())));
+    }
     Instance::delete(&inner.instances_dir, &uuid)
 }
 

@@ -169,21 +169,36 @@ impl Instance {
         self.config_overrides.remove(key.as_str()).is_some()
     }
 
-    /// Borra la carpeta completa de la instancia. Defensa de path: el objetivo
-    /// canonicalizado debe seguir siendo un hijo estricto del directorio raíz.
+    /// Renombra primero en el mismo directorio; si la limpieza falla, la basura
+    /// permanece aislada con su ruta en el error, sin fingir borrado completo.
     pub fn delete(instances_dir: &Path, id: &Uuid) -> Result<()> {
+        Self::delete_with(instances_dir, id, |from, to| fs::rename(from, to), |path| fs::remove_dir_all(path))
+    }
+
+    fn delete_with<R, D>(instances_dir: &Path, id: &Uuid, rename: R, remove: D) -> Result<()>
+    where
+        R: FnOnce(&Path, &Path) -> std::io::Result<()>,
+        D: FnOnce(&Path) -> std::io::Result<()>,
+    {
         let dir = Self::dir(instances_dir, id);
-        if !dir.exists() {
-            return Ok(());
+        let metadata = match fs::symlink_metadata(&dir) {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+            return Err("La instancia no es un directorio real; borrado abortado".into());
         }
-        let root = fs::canonicalize(instances_dir)
-            .map_err(|e| format!("No se pudo canonicalizar instances_dir: {e}"))?;
-        let target = fs::canonicalize(&dir)
-            .map_err(|e| format!("No se pudo canonicalizar la instancia: {e}"))?;
-        if target == root || !target.starts_with(&root) {
+        let root = fs::canonicalize(instances_dir)?;
+        let target = fs::canonicalize(&dir)?;
+        if target.parent() != Some(root.as_path()) {
             return Err("Ruta de instancia fuera del directorio raíz; borrado abortado".into());
         }
-        fs::remove_dir_all(&target)?;
+        let trash = root.join(format!(".trash-{id}-{}", Uuid::new_v4()));
+        rename(&target, &trash)?;
+        remove(&trash).map_err(|e| LauncherError::Custom(format!(
+            "Instancia apartada pero limpieza incompleta en {}: {e}", trash.display()
+        )))?;
         Ok(())
     }
 
@@ -314,6 +329,31 @@ mod tests {
         assert_eq!(inst.name, "b");
         assert_eq!(inst.minecraft_version, "1.21.1");
         assert_eq!(inst.fabric_loader.as_deref(), Some("0.20.1"));
+    }
+
+    #[test]
+    fn delete_two_phase_failures_preserve_consistent_state() {
+        let root = temp_dir().join(format!("rf-delete-{}", Uuid::new_v4()));
+        let id = Uuid::new_v4();
+        let dir = Instance::dir(&root, &id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("instance.json"), "intact").unwrap();
+        let failed = Instance::delete_with(&root, &id,
+            |_, _| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "simulated rename failure")),
+            |_| panic!("remove must not run"));
+        assert!(failed.is_err());
+        assert_eq!(fs::read_to_string(dir.join("instance.json")).unwrap(), "intact");
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        println!("DELETE_RENAME_FAILURE=ORIGINAL_INTACT NO_TRASH");
+        let failed = Instance::delete_with(&root, &id, |a, b| fs::rename(a, b),
+            |_| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "simulated cleanup failure")));
+        assert!(failed.is_err());
+        assert!(!dir.exists());
+        let trash = fs::read_dir(&root).unwrap().next().unwrap().unwrap().path();
+        assert!(trash.file_name().unwrap().to_string_lossy().starts_with(".trash-"));
+        assert_eq!(fs::read_to_string(trash.join("instance.json")).unwrap(), "intact");
+        println!("DELETE_CLEANUP_FAILURE=ISOLATED_TRASH ERROR_REPORTED");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

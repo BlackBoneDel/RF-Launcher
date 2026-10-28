@@ -162,8 +162,8 @@ pub fn parse_fabric_loaders(payload: &Value) -> Result<Vec<FabricLoaderInfo>, St
 }
 
 /// Caché local con TTL. Si el fichero está fresco se usa; si no, se intenta
-/// refrescar por red. Si la red falla SIEMPRE se devuelve el payload del
-/// fixture, nunca un error que bloquee la creación de instancias.
+/// refrescar por red. Si falla, usa la última caché válida, aunque sea antigua;
+/// sin caché previa usa el fixture verificado.
 pub struct CatalogCache {
     pub dir: PathBuf,
     pub ttl: Duration,
@@ -187,6 +187,10 @@ impl CatalogCache {
         self.dir.join(format!("{key}.json"))
     }
 
+    fn read_cached(&self, key: &str) -> Option<Value> {
+        serde_json::from_str(&fs::read_to_string(self.path_for(key)).ok()?).ok()
+    }
+
     fn read_fresh(&self, key: &str) -> Option<Value> {
         let path = self.path_for(key);
         let modified = fs::metadata(&path).ok()?.modified().ok()?;
@@ -201,7 +205,12 @@ impl CatalogCache {
     fn write(&self, key: &str, value: &Value) -> Result<(), String> {
         fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
         let text = serde_json::to_string(value).map_err(|e| e.to_string())?;
-        fs::write(self.path_for(key), text).map_err(|e| e.to_string())?;
+        let temp = self.dir.join(format!(".cache-{}.tmp", uuid::Uuid::new_v4()));
+        fs::write(&temp, text).map_err(|e| e.to_string())?;
+        if let Err(e) = fs::rename(&temp, self.path_for(key)) {
+            let _ = fs::remove_file(temp);
+            return Err(e.to_string());
+        }
         Ok(())
     }
 
@@ -211,7 +220,6 @@ impl CatalogCache {
         url: &str,
         fixture_raw: &str,
     ) -> Result<Value, String> {
-        let fixture = verify_fixture(fixture_raw)?;
         if let Some(cached) = self.read_fresh(key) {
             return Ok(cached);
         }
@@ -229,7 +237,10 @@ impl CatalogCache {
             }
             _ => {}
         }
-        Ok(fixture)
+        if let Some(cached) = self.read_cached(key) {
+            return Ok(cached);
+        }
+        verify_fixture(fixture_raw)
     }
 }
 
@@ -276,4 +287,22 @@ mod tests {
         assert!(cache.read_fresh("x").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
+    #[tokio::test]
+    async fn offline_uses_fixture_then_last_good_stale_cache() {
+        let dir = std::env::temp_dir().join(format!("rf-catalog-{}", uuid::Uuid::new_v4()));
+        let cache = CatalogCache::new(dir.clone(), Duration::ZERO);
+        let url = "http://127.0.0.1:0/offline";
+        let first = cache.get("mojang", url, MOJANG_FIXTURE).await.unwrap();
+        assert_eq!(first, mojang_fixture().unwrap());
+        println!("OFFLINE_NO_CACHE=FIXTURE");
+        let good = serde_json::json!({"versions": [{"id": "last-good", "url": "https://example.invalid"}]});
+        cache.write("mojang", &good).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(cache.read_fresh("mojang").is_none());
+        let second = cache.get("mojang", url, MOJANG_FIXTURE).await.unwrap();
+        assert_eq!(second, good);
+        println!("OFFLINE_STALE_CACHE=LAST_GOOD id=last-good");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
 }
