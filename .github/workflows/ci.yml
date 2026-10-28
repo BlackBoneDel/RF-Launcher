@@ -127,36 +127,6 @@ jobs:
             2>&1 | tee cargo_test.log
         working-directory: src-tauri
 
-      # Artefacto temporal para retest de PR #9: solo el push de esta rama,
-      # sin feature e2e ni publicación de Release oficial. Retirar tras el retest.
-      - name: Compilar y verificar ejecutable Windows para retest
-        if: runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/arena/df230d38-rf-launcher'
-        working-directory: src-tauri
-        run: |
-          set -euo pipefail
-          npx --yes @tauri-apps/cli@2.12.4 build --ci --no-sign --no-bundle
-          mkdir -p ../windows-retest
-          cp "target/release/RF Launcher.exe" "../windows-retest/RF Launcher.exe"
-          python3 ../scripts/check_release_binary.py "../windows-retest/RF Launcher.exe" release
-          python3 - <<'PYCODE'
-          import hashlib
-          from pathlib import Path
-          exe = Path('../windows-retest/RF Launcher.exe')
-          digest = hashlib.sha256(exe.read_bytes()).hexdigest()
-          Path('../windows-retest/SHA256SUMS.txt').write_text(f'{digest}  RF Launcher.exe\n', encoding='utf-8')
-          print(f'WINDOWS_RETEST_SHA256={digest}')
-          print(f'WINDOWS_RETEST_SIZE={exe.stat().st_size}')
-          PYCODE
-
-      - name: Subir ejecutable Windows para retest de PR #9
-        if: runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/arena/df230d38-rf-launcher'
-        uses: actions/upload-artifact@v4
-        with:
-          name: rf-launcher-pr9-windows-retest
-          path: windows-retest/
-          if-no-files-found: error
-          retention-days: 14
-
       # Sonda de red INDEPENDIENTE de nuestro código Rust. Permite distinguir
       # "el runner no alcanza Adoptium" de "nuestro pick_asset está mal".
       - name: Sonda de red Adoptium en este runner
@@ -392,6 +362,36 @@ jobs:
       # Los logs/artefactos de GitHub redirigen a un blob host que no siempre es
       # alcanzable. Las anotaciones SÍ se leen por API, así que publicamos aquí
       # los números que el informe necesita como evidencia verificable.
+      # Artefacto temporal para retest de PR #9: solo el push de esta rama,
+      # sin feature e2e ni publicación de Release oficial. Retirar tras el retest.
+      - name: Compilar y verificar ejecutable Windows para retest
+        if: runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/arena/df230d38-rf-launcher'
+        working-directory: src-tauri
+        run: |
+          set -euo pipefail
+          npx --yes @tauri-apps/cli@2.12.4 build --ci --no-sign --no-bundle
+          mkdir -p ../windows-retest
+          cp "target/release/RF Launcher.exe" "../windows-retest/RF Launcher.exe"
+          python3 ../scripts/check_release_binary.py "../windows-retest/RF Launcher.exe" release
+          python3 - <<'PYCODE'
+          import hashlib
+          from pathlib import Path
+          exe = Path('../windows-retest/RF Launcher.exe')
+          digest = hashlib.sha256(exe.read_bytes()).hexdigest()
+          Path('../windows-retest/SHA256SUMS.txt').write_text(f'{digest}  RF Launcher.exe\n', encoding='utf-8')
+          print(f'WINDOWS_RETEST_SHA256={digest}')
+          print(f'WINDOWS_RETEST_SIZE={exe.stat().st_size}')
+          PYCODE
+
+      - name: Subir ejecutable Windows para retest de PR #9
+        if: runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/arena/df230d38-rf-launcher'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rf-launcher-pr9-windows-retest
+          path: windows-retest/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Publicar evidencia medible de esta corrida
         if: always()
         run: |
