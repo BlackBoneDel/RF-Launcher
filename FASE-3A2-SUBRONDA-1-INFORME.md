@@ -36,3 +36,7 @@ La eliminación cambia el nombre de la carpeta a `.trash-<uuid>-<uuid>` antes de
 ## Última corrida completada
 
 [40692772610](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40692772610), commit `e6b3ec7`: Linux, Windows y macOS exitosos; `e2e-linux` falló por edición. Este run es evidencia del DOM y casos individuales, no una certificación de la sub-ronda. Las mutaciones de Java y lanzamiento no se ejecutaron.
+
+## Nota sobre el runner headless (verificación de audio)
+
+En el log del intento Linux CI 40708831124, los errores `Failed to open OpenAL device` y `Failed to load library flite` corresponden respectivamente a ausencia de dispositivo de audio accesible y biblioteca de narrador en ese runner headless. No son fallos de descarga de assets; no se persiguen como bloqueantes de esta ejecución. No se ha demostrado que sean irreproducibles en toda máquina de usuario: un equipo también podría carecer de hardware o de la biblioteca. El sonido, el narrador y la jugabilidad no quedan verificados por este CI.

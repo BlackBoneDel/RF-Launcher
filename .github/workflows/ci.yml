@@ -555,6 +555,9 @@ jobs:
           python3 ../scripts/check_release_binary.py target/release/rf-launcher e2e
         working-directory: src-tauri
 
+      - name: Mutaciones negativas Java y assets de lanzamiento
+        run: python3 scripts/check_mutations.py
+
       - name: Intento E2E Minecraft Fabric y JVM reales
         env:
           RUST_BACKTRACE: "1"
@@ -576,6 +579,25 @@ jobs:
           xvfb-run -a npm test 2>&1 | tee wdio.log
         working-directory: e2e
 
+      - name: Repetir suite E2E de aislamiento (2 corridas)
+        if: always() && steps.compile_e2e.outcome == 'success'
+        env:
+          RUST_BACKTRACE: "1"
+          TAURI_DRIVER: /home/runner/.cargo/bin/tauri-driver
+          WEBKIT_WEBDRIVER: /usr/bin/WebKitWebDriver
+        run: |
+          set -o pipefail
+          for n in 2 3; do
+            echo "E2E_REPEAT_RUN=$n"
+            xvfb-run -a npm test 2>&1 | tee "wdio-repeat-$n.log"
+            if grep -i 'stale element' "wdio-repeat-$n.log"; then
+              echo "E2E_STALE_ELEMENT_RUN=$n PRESENT=true"
+            else
+              echo "E2E_STALE_ELEMENT_RUN=$n PRESENT=false"
+            fi
+          done
+        working-directory: e2e
+
       - name: Subir logs E2E
         if: always()
         uses: actions/upload-artifact@v4
@@ -584,6 +606,7 @@ jobs:
           include-hidden-files: true
           path: |
             e2e/wdio.log
+            e2e/wdio-repeat-*.log
             e2e/wdio-real.log
             .e2e-home/**/*.log
             .e2e-java.pid
