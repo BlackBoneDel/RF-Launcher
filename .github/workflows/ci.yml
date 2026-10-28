@@ -544,7 +544,10 @@ jobs:
         env:
           RUST_BACKTRACE: "1"
           TAURI_DRIVER: /home/runner/.cargo/bin/tauri-driver
-        run: xvfb-run -a npm test
+          WEBKIT_WEBDRIVER: /usr/bin/WebKitWebDriver
+        run: |
+          set -o pipefail
+          xvfb-run -a npm test 2>&1 | tee wdio.log
         working-directory: e2e
 
       - name: Subir logs E2E
@@ -553,8 +556,8 @@ jobs:
         with:
           name: e2e-linux-logs
           path: |
-            e2e/*.log
-            .e2e-data/**/*.log
+            e2e/wdio.log
+            .e2e-home/**/*.log
             .e2e-java.pid
           if-no-files-found: ignore
 

@@ -30,3 +30,4 @@ e2e/node_modules/
 .e2e-data/
 .e2e-java.pid
 .e2e-jdk.tar.gz
+.e2e-home/

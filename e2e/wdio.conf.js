@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
-const dataRoot = path.resolve(repoRoot, '.e2e-data');
+const homeDir = path.resolve(repoRoot, '.e2e-home');
+const dataRoot = path.resolve(homeDir, '.local', 'share');
 const pidFile = path.resolve(repoRoot, '.e2e-java.pid');
 const fixturePort = Number(process.env.RF_E2E_FIXTURE_PORT || 47831);
 const adoptiumBase = `http://127.0.0.1:${fixturePort}/v3`;
@@ -99,6 +100,23 @@ async function startFixtureServer() {
   console.log(`E2E_FIXTURE_SERVER=http://127.0.0.1:${fixturePort} jdk_sha256=${archiveSha256}`);
 }
 
+async function waitForHttp(url, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        console.log(`E2E_DRIVER_READY=${url}`);
+        return;
+      }
+    } catch {
+      // El driver aún no escucha.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`El driver WebDriver no respondió /status en ${timeoutMs}ms`);
+}
+
 function closeFixtureServer() {
   if (fixtureServer) {
     fixtureServer.close();
@@ -145,20 +163,25 @@ export const config = {
   framework: 'mocha',
   mochaOpts: {
     ui: 'bdd',
-    timeout: 240000,
+    timeout: 300000,
   },
   waitforTimeout: 30000,
-  connectionRetryCount: 10,
-  connectionRetryTimeout: 30000,
+  connectionRetryCount: 3,
+  connectionRetryTimeout: 120000,
   logLevel: 'warn',
 
   onPrepare: async () => {
-    fs.rmSync(dataRoot, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
     fs.rmSync(pidFile, { force: true });
     fs.mkdirSync(dataRoot, { recursive: true });
 
     // Variables heredadas por tauri-driver -> aplicación Tauri real.
+    process.env.HOME = homeDir;
     process.env.XDG_DATA_HOME = dataRoot;
+    process.env.GDK_BACKEND = 'x11';
+    process.env.LIBGL_ALWAYS_SOFTWARE = '1';
+    process.env.WEBKIT_DISABLE_DMABUF_RENDERER = '1';
+    process.env.WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS = '1';
     process.env.RF_LAUNCHER_E2E = '1';
     process.env.RF_LAUNCHER_E2E_ADOPTIUM_BASE = adoptiumBase;
     process.env.RF_LAUNCHER_E2E_MINECRAFT_FIXTURE = '1';
@@ -170,9 +193,16 @@ export const config = {
     console.log(`E2E_DATA_ROOT=${dataRoot}`);
   },
 
-  beforeSession: () => {
+  beforeSession: async () => {
     const driver = process.env.TAURI_DRIVER || path.resolve(os.homedir(), '.cargo', 'bin', 'tauri-driver');
-    tauriDriver = spawn(driver, [], {
+    const nativeDriver = process.env.WEBKIT_WEBDRIVER || '/usr/bin/WebKitWebDriver';
+    const args = [
+      '--port', '4444',
+      '--native-port', '4445',
+      '--native-driver', nativeDriver,
+    ];
+    console.log(`E2E_TAURI_DRIVER=${driver} ${args.join(' ')}`);
+    tauriDriver = spawn(driver, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
     });
@@ -186,6 +216,9 @@ export const config = {
         console.error(`tauri-driver exited with code ${code}`);
       }
     });
+
+    // Espera explícita a que el proxy y el driver nativo estén listos.
+    await waitForHttp('http://127.0.0.1:4444/status', 30000);
   },
 
   afterSession: () => {

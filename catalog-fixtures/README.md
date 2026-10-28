@@ -3,7 +3,7 @@
 Estos ficheros son **fallbacks offline deliberadamente recortados**, no el catálogo completo ni una lista hardcodeada que se haga pasar por datos reales.
 
 - `mojang-version-manifest-v2.json`: copia mínima del manifiesto v2 de Mojang con `latest` y dos entradas reales. El runtime usará el endpoint completo; este fichero sólo evita que el selector falle sin red.
-- `fabric-loader-1.21.1.json`: copia mínima de `meta.fabricmc.net/v2/versions/loader/1.21.1` con dos loaders reales (`0.20.1 stable`, `0.20.0 inestable`) y `launcherMeta.mainClass`.
+- `fabric-loader-1.21.1.json`: copia mínima de `meta.fabricmc.net/v2/versions/loader/1.21.1`, en la misma forma de **array** que el endpoint real, con dos loaders (`0.20.1 stable`, `0.20.0 inestable`) y `launcherMeta.mainClass`.
 
 Cada fixture es un sobre con:
 

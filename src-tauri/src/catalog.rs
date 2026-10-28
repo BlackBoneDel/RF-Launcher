@@ -7,7 +7,7 @@
 #![allow(dead_code)] // La UI de selectores llega en la sub-ronda 2.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
