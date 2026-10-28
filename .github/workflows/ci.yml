@@ -8,11 +8,20 @@
 #   2) el nombre del workflow dice explícitamente qué verifica.
 # Si en el futuro se añade un workflow legítimo, hay que actualizar la guardia
 # Y documentarlo: un workflow extra sin matriz es un falso verde en potencia.
+#
+# Los jobs de Release viven al final de ESTE mismo fichero. Sólo se ejecutan
+# con el tag build-v* o workflow_dispatch; no sustituyen a la matriz de tests
+# y no pueden fabricar un verde porque dependen de instalar/bundlear en 3 SO.
 name: CI Matriz RF Launcher 3 SO (verificación real)
 
 on:
   push:
+    branches:
+      - '**'
+    tags:
+      - 'build-v*'
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,6 +33,9 @@ defaults:
 
 jobs:
   build-and-test:
+    # El tag build-v* y workflow_dispatch son disparadores de Release: no
+    # duplican la matriz de tests, que ya se ejecutó en el push/PR del código.
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/build-v'))
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -84,18 +96,32 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      - name: Verificar Cargo.lock congelado
+        shell: bash
+        working-directory: src-tauri
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          digest = hashlib.sha256(Path("Cargo.lock").read_bytes()).hexdigest()
+          print(f"::notice title=evidence-cargo-lock::CARGO_LOCK_SHA256={digest}")
+          PY
+          cargo metadata --locked --format-version 1 > /dev/null
+          echo "CARGO_LOCKED=OK"
+
       - name: Type-check y build del frontend (Vite)
         run: npm run build
         working-directory: frontend
 
       - name: Build del backend Rust (release)
-        run: cargo build --release 2>&1 | tee cargo_build.log
+        run: cargo build --locked --release 2>&1 | tee cargo_build.log
         working-directory: src-tauri
 
       - name: Tests unitarios de Rust (config, instancia, RAM, mapeo Java)
         run: |
           set -o pipefail
-          cargo test -- --nocapture \
+          cargo test --locked -- --nocapture \
             --skip ensure_java_21_downloads_from_adoptium \
             --skip mojang_manifest_major_version_matches_static_table \
             2>&1 | tee cargo_test.log
@@ -146,7 +172,7 @@ jobs:
       - name: Smoke test de descarga real de JDK 21 desde Adoptium (3 SO)
         run: |
           set -o pipefail
-          cargo test ensure_java_21_downloads_from_adoptium -- --nocapture 2>&1 | tee cargo_smoke.log
+          cargo test --locked ensure_java_21_downloads_from_adoptium -- --nocapture 2>&1 | tee cargo_smoke.log
         working-directory: src-tauri
 
       # El manifiesto de Mojang es JSON independiente de la plataforma; se
@@ -155,7 +181,7 @@ jobs:
         if: "runner.os == 'Linux'"
         run: |
           set -o pipefail
-          cargo test mojang_manifest_major_version_matches_static_table -- --nocapture 2>&1 | tee cargo_smoke_mojang.log
+          cargo test --locked mojang_manifest_major_version_matches_static_table -- --nocapture 2>&1 | tee cargo_smoke_mojang.log
         working-directory: src-tauri
 
       # ---------------- Línea base de RAM en reposo, los 3 SO ----------------
@@ -169,8 +195,18 @@ jobs:
           echo "RAM_IDLE_OS=Linux" >> ram_baseline.txt
           echo "RAM_IDLE_METRIC=VmRSS de /proc/PID/status (KB)" >> ram_baseline.txt
           xvfb-run -a ./target/release/rf-launcher >> launcher_ram.log 2>&1 &
-          sleep 12
-          LPID=$(pgrep -x rf-launcher | head -1)
+          # Un único muestreo a los 12 s produjo un falso negativo en el run
+          # 40516180072: el proceso apareció vivo en el cleanup 1 s después.
+          # Reintentamos hasta 20 s antes de declarar BLOCKED.
+          LPID=""
+          for attempt in $(seq 1 20); do
+            LPID=$(pgrep -x rf-launcher | head -1)
+            if [ -n "$LPID" ]; then
+              echo "RAM_IDLE_WAIT_ATTEMPTS=$attempt" >> ram_baseline.txt
+              break
+            fi
+            sleep 1
+          done
           if [ -n "$LPID" ]; then
             MAIN=$(awk '/^VmRSS:/{print $2}' "/proc/$LPID/status")
             TREE=${MAIN:-0}
@@ -347,7 +383,7 @@ jobs:
               markers = [l for l in lines if re.search(
                   r"(ADOPTIUM_SMOKE|ADOPTIUM_API|ADOPTIUM_DOWNLOAD|MOJANG_SMOKE|"
                   r"RETRY_TEST|KILL_TEST_CHILD_RSS_KB|RAM_FISICA_MB|"
-                  r"kill_really_terminates|truncated_download|interrupted_install)", l)]
+                  r"kill_really_terminates|truncated_download|interrupted_install|THEME_PERSISTENCE|MUTATION_CONTROL)", l)]
               notice("evidence-tests", f"[{p}]\n" + "\n".join((results + failed[:8] + markers[:14]) or ["sin datos"]))
               phys = [l for l in lines if "RAM_FISICA_MB=" in l]
               if phys:
@@ -441,3 +477,415 @@ jobs:
 # 40444478091 para cerrar #4/#5/#6 tras el 403 del token de integración.
 # Se retiró en la auditoría posterior: su marcador en el mensaje de commit era
 # reproducible por accidente; el permiso de escritura de issues ya no vive aquí.
+
+  # ------------------------- Release controlado -------------------------
+  # Estos dos jobs viven en el MISMO workflow para no reintroducir un segundo
+  # YAML que la guardia anti-falsos verdes tendría que vigilar. Sólo corren con
+  # el tag build-v* o con workflow_dispatch manual; nunca en un push normal.
+  build-installers:
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/build-v')) || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            mandatory_bundles: nsis
+            optional_bundles: msi
+            artifact: installer-windows
+          - os: macos-latest
+            mandatory_bundles: dmg
+            optional_bundles: app
+            artifact: installer-macos
+          - os: ubuntu-24.04
+            mandatory_bundles: deb
+            optional_bundles: appimage
+            artifact: installer-linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Leer manifiesto de release
+        id: release
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          manifest = json.load(open('.github/release-manifest.json', encoding='utf-8'))
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              for key in ('version', 'release_tag', 'target_sha', 'build_trigger_tag', 'product_name'):
+                  f.write(f"{key}={manifest[key]}\n")
+          PY
+
+      - name: Instalar Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache de compilación Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: "rf-launcher-release-${{ matrix.os }}"
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependencias de sistema (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            xvfb patchelf squashfs-tools
+          # AppImage es opcional: si el runner no tiene el paquete FUSE exacto,
+          # no debe impedir el .deb obligatorio.
+          sudo apt-get install -y libfuse2 || sudo apt-get install -y libfuse2t64 || true
+
+      - name: Instalar dependencias de frontend
+        run: npm ci
+        working-directory: frontend
+
+      - name: Verificar Cargo.lock antes de empaquetar
+        shell: bash
+        working-directory: src-tauri
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Build obligatorio de instalador Tauri 2
+        shell: bash
+        working-directory: src-tauri
+        run: |
+          set -o pipefail
+          npx --yes @tauri-apps/cli@2.12.4 build \
+            --ci --no-sign --bundles ${{ matrix.mandatory_bundles }} 2>&1 | tee tauri-build.log
+
+      - name: Bundle opcional por SO (no bloqueante)
+        if: matrix.optional_bundles != ''
+        continue-on-error: true
+        shell: bash
+        working-directory: src-tauri
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          set -o pipefail
+          npx --yes @tauri-apps/cli@2.12.4 build \
+            --ci --no-sign --bundles ${{ matrix.optional_bundles }} 2>&1 | tee -a tauri-build.log
+
+      - name: Publicar log del bundle si falla
+        if: failure()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src-tauri/tauri-build.log')
+          text = p.read_text(encoding='utf-8', errors='replace') if p.exists() else '(sin tauri-build.log)'
+          enc = text[-12000:].replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print(f"::error title=tauri-build-log-${{ matrix.os }}::OS=${{ matrix.os }}%0A" + enc)
+          PY
+
+      - name: Recoger instaladores, zip de .app y hashes locales
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, platform, re, shutil, zipfile
+          from pathlib import Path
+          root = Path('src-tauri/target/release/bundle')
+          out = Path('release-assets')
+          if out.exists():
+              shutil.rmtree(out)
+          out.mkdir()
+          system = platform.system()
+          os_name = {'Windows': 'windows', 'Darwin': 'macos', 'Linux': 'linux'}[system]
+          machine = platform.machine()
+          arch = {
+              'x86_64': 'x86_64', 'AMD64': 'x86_64', 'amd64': 'x86_64',
+              'arm64': 'aarch64', 'aarch64': 'aarch64',
+          }.get(machine, machine)
+          exts = {'.msi', '.exe', '.dmg', '.deb', '.appimage', '.zip'}
+          copied = []
+          for p in sorted(root.rglob('*')):
+              if p.is_file() and p.suffix.lower() in exts:
+                  safe = re.sub(r'[^A-Za-z0-9._-]+', '-', p.name)
+                  dest = out / f"{os_name}-{arch}-{safe}"
+                  shutil.copy2(p, dest)
+                  copied.append(dest)
+          if os_name == 'macos':
+              app_dirs = [p for p in sorted(root.rglob('*.app')) if p.is_dir()]
+              if app_dirs:
+                  zpath = out / f"macos-{arch}-RF-Launcher.app.zip"
+                  with zipfile.ZipFile(zpath, 'w', zipfile.ZIP_DEFLATED) as z:
+                      for f in app_dirs[0].rglob('*'):
+                          if f.is_file():
+                              z.write(f, f.relative_to(app_dirs[0].parent))
+                  copied.append(zpath)
+          if not copied:
+              raise SystemExit('ERROR: no se generó ningún instalador nativo')
+          lines = []
+          for f in sorted(out.iterdir()):
+              digest = hashlib.sha256(f.read_bytes()).hexdigest()
+              lines.append(f"{digest}  {f.name}")
+              print(f"INSTALLER {f.name} size={f.stat().st_size} sha256={digest}")
+          Path('installer-hashes.txt').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          print(f"INSTALLER_COUNT={len(copied)}")
+          PY
+
+      - name: Publicar evidencia de instaladores
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          body = Path('installer-hashes.txt').read_text(encoding='utf-8')
+          enc = body.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print(f"::notice title=evidence-installers::OS=${{ matrix.os }}%0A" + enc)
+          PY
+
+      - name: Subir instaladores como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Subir logs del bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-log-${{ matrix.os }}
+          path: |
+            src-tauri/tauri-build.log
+            installer-hashes.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+  publish-release:
+    needs: build-installers
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/build-v')) || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Leer manifiesto de release
+        id: release
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          manifest = json.load(open('.github/release-manifest.json', encoding='utf-8'))
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              for key in ('version', 'release_tag', 'target_sha', 'build_trigger_tag', 'product_name'):
+                  f.write(f"{key}={manifest[key]}\n")
+          PY
+
+      - name: Descargar instaladores de los 3 SO
+        uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Verificar cobertura mínima de formatos
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          files = sorted(p for p in Path('release-assets').iterdir() if p.is_file())
+          names = [p.name.lower() for p in files]
+          print('ASSETS_FROM_MATRIX=' + ','.join(p.name for p in files))
+          assert any(n.endswith(('.msi', '.exe')) for n in names), 'falta instalador Windows .msi/.exe'
+          assert any(n.endswith('.dmg') for n in names), 'falta instalador macOS .dmg'
+          assert any(n.endswith(('.deb', '.appimage')) for n in names), 'falta instalador Linux .deb/.AppImage'
+          print('MINIMUM_FORMAT_COVERAGE=OK')
+          PY
+
+      - name: Generar SHA256SUMS y notas del Release
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          TARGET_SHA: ${{ steps.release.outputs.target_sha }}
+          VERSION: ${{ steps.release.outputs.version }}
+          PRODUCT_NAME: ${{ steps.release.outputs.product_name }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, os
+          from pathlib import Path
+          out = Path('release-assets')
+          rows = []
+          sums = []
+          for f in sorted(out.iterdir()):
+              if not f.is_file() or f.name == 'SHA256SUMS.txt':
+                  continue
+              digest = hashlib.sha256(f.read_bytes()).hexdigest()
+              sums.append(f"{digest}  {f.name}")
+              rows.append((f.name, f.stat().st_size, digest))
+          (out / 'SHA256SUMS.txt').write_text('\n'.join(sums) + '\n', encoding='utf-8')
+          tag = os.environ['RELEASE_TAG']
+          sha = os.environ['TARGET_SHA']
+          version = os.environ['VERSION']
+          product = os.environ['PRODUCT_NAME']
+          run_id = os.environ['RUN_ID']
+          lines = [
+              f'# {product} {version}',
+              '',
+              f'- Release tag: `{tag}`',
+              f'- `target_commitish` / SHA de `main`: `{sha}`',
+              f'- Workflow run: `{run_id}`',
+              '- Repo: **público**; no hace falta sesión autenticada para descargar los assets.',
+              '',
+              '## Incluido',
+              '',
+              '- Fase 3-A: instancias vanilla/Fabric, configuración jerárquica, RAM física real,',
+              '  Java automático vía Adoptium, temas claro/oscuro y terminación verificada de procesos.',
+              '- Deuda técnica cerrada: migración a **Tauri 2**, rechazo duro de **100 % o más**',
+              '  de RAM física (`>=`), y cable IPC unificado a **camelCase** con aliases legacy.',
+              '- Instaladores nativos sin firmar para Windows, macOS y Linux.',
+              '',
+              '## NO incluido',
+              '',
+              '- **Fase 3-B aún no iniciada**: no hay mod loaders adicionales, mods, modpacks,',
+              '  cuentas, OAuth ni integración con el mod hermano.',
+              '- No hay firma de código ni notarización: SmartScreen/Gatekeeper pueden avisar.',
+              '- No se ha ejecutado una instalación interactiva en un sistema limpio desde CI;',
+              '  eso se cubre con la checklist manual del Release.',
+              '',
+              '## Assets y SHA-256',
+              '',
+              '| Asset | Tamaño (bytes) | SHA-256 |',
+              '|---|---:|---|',
+          ]
+          for name, size, digest in rows:
+              lines.append(f'| `{name}` | {size} | `{digest}` |')
+          lines += [
+              '',
+              '`SHA256SUMS.txt` también se publica como asset. El workflow descarga los assets',
+              'ya publicados y ejecuta `sha256sum -c`; además compara el `digest` de la API',
+              'de GitHub cuando está disponible.',
+              '',
+              '> Procedencia: los instaladores se construyeron desde el commit de trabajo del PR',
+              '> que contiene los ajustes de metadata y este workflow. El tag del Release apunta',
+              '> al SHA de `main` indicado arriba; el PR permanece abierto para revisión.',
+              '',
+              '## Checklist de prueba manual',
+              '',
+          ]
+          lines.append(Path('RELEASE-0.1.0-MANUAL-CHECKLIST.md').read_text(encoding='utf-8'))
+          Path('release_notes.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          print(f'NOTES_BYTES={Path("release_notes.md").stat().st_size}')
+          for row in rows:
+              print(f'LOCAL_HASH {row[0]} {row[1]} {row[2]}')
+          PY
+
+      - name: Crear o actualizar Release v0.1.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          TARGET_SHA: ${{ steps.release.outputs.target_sha }}
+          VERSION: ${{ steps.release.outputs.version }}
+          PRODUCT_NAME: ${{ steps.release.outputs.product_name }}
+        shell: bash
+        run: |
+          set -e
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "RELEASE_EXISTED=1: actualizando notas y assets"
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "$PRODUCT_NAME $VERSION" --notes-file release_notes.md
+            gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              release-assets/* --clobber
+          else
+            echo "RELEASE_EXISTED=0: creando Release apuntando a $TARGET_SHA"
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$TARGET_SHA" \
+              --title "$PRODUCT_NAME $VERSION" \
+              --notes-file release_notes.md \
+              release-assets/*
+          fi
+
+      - name: "Verificación end-to-end: descargar asset publicado y comparar hash"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          TARGET_SHA: ${{ steps.release.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -e
+          mkdir -p downloaded
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir downloaded --pattern '*' --clobber
+          (cd downloaded && sha256sum -c SHA256SUMS.txt) | tee download-verify.log
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            --jq '.assets[] | [.name,.size,.digest] | @tsv' > remote_assets.tsv
+          git fetch origin main
+          git fetch --tags origin
+          MAIN_SHA=$(git rev-parse origin/main)
+          TAG_COMMIT=$(git rev-parse "$RELEASE_TAG^{commit}")
+          TARGET_COMMITISH=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.target_commitish')
+          if git rev-parse "$TARGET_COMMITISH^{commit}" >/dev/null 2>&1; then
+            TARGET_COMMITISH_SHA=$(git rev-parse "$TARGET_COMMITISH^{commit}")
+          else
+            TARGET_COMMITISH_SHA="$TARGET_COMMITISH"
+          fi
+          export MAIN_SHA TAG_COMMIT TARGET_COMMITISH TARGET_COMMITISH_SHA
+          python3 - <<'PY'
+          import hashlib, os
+          from pathlib import Path
+          target = os.environ['TARGET_SHA']
+          lines = [f"TARGET_SHA={target}"]
+          lines.append(f"TARGET_COMMITISH_RAW={os.environ['TARGET_COMMITISH']}")
+          checks = {
+              'MAIN_SHA': os.environ['MAIN_SHA'],
+              'TAG_COMMIT': os.environ['TAG_COMMIT'],
+              'TARGET_COMMITISH_SHA': os.environ['TARGET_COMMITISH_SHA'],
+          }
+          for key, value in checks.items():
+              lines.append(f"{key}={value}")
+              if value != target:
+                  raise SystemExit(f"ERROR: {key} no apunta a {target}: {value}")
+          api_matches = 0
+          api_null = 0
+          for raw in Path('remote_assets.tsv').read_text(encoding='utf-8').splitlines():
+              parts = raw.split('\t')
+              if len(parts) < 3:
+                  continue
+              name, size, digest = parts[0], parts[1], parts[2]
+              local = Path('downloaded') / name
+              actual = hashlib.sha256(local.read_bytes()).hexdigest()
+              lines.append(f"DOWNLOADED {name} size={size} sha256={actual}")
+              if not digest or digest == 'null':
+                  api_null += 1
+                  lines.append(f"API_DIGEST_MISSING {name}")
+              elif digest == f"sha256:{actual}":
+                  api_matches += 1
+                  lines.append(f"API_DIGEST_OK {name}")
+              else:
+                  raise SystemExit(f"ERROR: digest API {digest} != sha256:{actual} for {name}")
+          lines.append(f"API_DIGEST_MATCHES={api_matches}")
+          lines.append(f"API_DIGEST_NULL={api_null}")
+          lines.append("SHA256_DOWNLOAD_CHECK=OK")
+          lines.append("RELEASE_SHA_THREE_METHODS=OK")
+          text = '\n'.join(lines) + '\n'
+          Path('release_verification.txt').write_text(text, encoding='utf-8')
+          enc = text.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print("::notice title=evidence-release-e2e::" + enc)
+          print(text)
+          PY
+
+      - name: Subir evidencia de verificación del Release
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-verification
+          path: |
+            release_notes.md
+            release_verification.txt
+            download-verify.log
+            remote_assets.tsv
+          if-no-files-found: ignore
+          retention-days: 30

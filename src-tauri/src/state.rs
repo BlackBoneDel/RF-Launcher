@@ -5,7 +5,6 @@ use crate::config::ConfigEngine;
 use crate::launcher::Launcher;
 
 pub struct Inner {
-    pub data_dir: PathBuf,
     pub instances_dir: PathBuf,
     pub java_dir: PathBuf,
     pub assets_dir: PathBuf,

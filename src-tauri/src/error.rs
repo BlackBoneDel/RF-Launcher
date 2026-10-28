@@ -23,10 +23,6 @@ pub enum LauncherError {
     UnknownConfigKey(String),
     #[error("UUID inválido: {0}")]
     InvalidUuid(String),
-    #[error("La versión de Minecraft \"{0}\" no tiene mapeo de Java conocido")]
-    UnknownJavaMapping(String),
-    #[error("La descarga de Java {0} falló")]
-    JavaDownloadFailed(u32),
     #[error("RAM solicitada ({requested} MB) alcanza o supera la RAM física ({total} MB); 100 % o más se rechaza en duro")]
     RamExceedsPhysical { requested: u64, total: u64 },
     #[error("{0}")]

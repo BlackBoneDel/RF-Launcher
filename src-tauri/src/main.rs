@@ -47,12 +47,11 @@ fn main() {
                 .expect("No se pudo inicializar el motor de configuración");
 
             let inner = Inner {
-                data_dir,
                 instances_dir: instances_dir.clone(),
                 java_dir,
                 assets_dir,
                 config,
-                launcher: Mutex::new(Launcher::new(instances_dir)),
+                launcher: Mutex::new(Launcher::new()),
             };
             app.handle().manage(AppState {
                 inner: Mutex::new(inner),

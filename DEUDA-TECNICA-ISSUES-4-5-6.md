@@ -5,6 +5,14 @@
 > **Aislamiento.** Arena fija esta sesión a una sola rama, así que no fue posible crear una rama adicional. El trabajo está aislado en un **PR nuevo** (#7), distinto del PR #3 ya mergeado, y no toca módulos de Fase 3-B. No se hará merge sin aprobación explícita.
 >
 > **Fuente de verdad de SHA/run.** Este archivo participa en el commit que verifica, así que no congela aquí su propio SHA ni el run final. El SHA final y la corrida definitiva se congelan fuera del commit: en la descripción de PR #7, en `git notes` y en los comentarios de cierre de #4/#5/#6. Comando local: `git rev-parse HEAD`.
+>
+> **Actualización Quick Wins (pre-Fase 3-B):** el estado vigente tiene
+> **37 tests en código** (35 unitarios por job + 2 smoke de red), `Cargo.lock`
+> versionado con `--locked`, runner `ubuntu-24.04`, test de persistencia de tema
+> con control de mutación, `templateOrigin` oculto en UI y `InstanceSummary`
+> eliminada como código muerto. Los recuentos y ejemplos de esta sección que
+> dicen 27/29/34/36 tests, 5 structs o 16 aliases son históricos de la ronda de
+> deuda técnica.
 
 ## 1. Tarea 1 — Tauri 2 (issue #4)
 
@@ -31,7 +39,7 @@ Run `40439712705` (push sobre `3ad2047...`): `completed success`. Jobs por API:
 | `ubuntu-24.04` | `success` | `27 passed; 0 failed` | `1 passed` (+ Mojang `1 passed`, 6/6) | `SMOKE_STARTUP_STATUS=OK` |
 | `macos-latest` | `success` | `27 passed; 0 failed` | `1 passed` | `SMOKE_STARTUP_STATUS=OK` |
 
-Los 29 tests existentes se contabilizan como 27 unitarios por job + el smoke Adoptium ejecutado aparte en cada job + el smoke Mojang en Linux. El smoke estricto reutiliza el lanzamiento real de la medición de RAM y falla el job si el proceso no se mantiene vivo o si el log contiene pánico/error fatal. RAM física detectada: Windows 16 378 MB, Linux 15 988 MB, macOS 7 168 MB.
+En esa ronda los 29 tests existentes se contabilizaban como 27 unitarios por job + el smoke Adoptium ejecutado aparte en cada job + el smoke Mojang en Linux. El smoke estricto reutiliza el lanzamiento real de la medición de RAM y falla el job si el proceso no se mantiene vivo o si el log contiene pánico/error fatal. RAM física detectada: Windows 16 378 MB, Linux 15 988 MB, macOS 7 168 MB.
 
 ## 2. Tarea 2 — RAM al 100 % o más (issue #5)
 
@@ -59,29 +67,27 @@ Documentación actualizada: `README.md` dice explícitamente «100 % o más de l
 
 ### Evidencia de no regresión
 
-Runs `40440867877` (pull_request) y `40440864726` (push) sobre `f2b00de...`: ambos `completed success`, 3/3 jobs, 27 tests unitarios verdes por job. Ningún otro test dependía de `Warn` al 100 %.
+Runs `40440867877` (pull_request) y `40440864726` (push) sobre `f2b00de...`: ambos `completed success`, 3/3 jobs, 27 tests unitarios verdes por job (recuento histórico). Ningún otro test dependía de `Warn` al 100 %.
 
 ## 3. Tarea 3 — cable IPC camelCase (issue #6)
 
-Se aplicó `#[serde(rename_all = "camelCase")]` a las cinco structs que cruzan la frontera Rust → TS:
+Se aplicó `#[serde(rename_all = "camelCase")]` a las cuatro structs que cruzan la frontera Rust → TS (originalmente cinco; `InstanceSummary` se eliminó después por código muerto):
 
 - `Instance` (`src-tauri/src/instance.rs`)
-- `InstanceSummary` (`src-tauri/src/instance.rs`)
 - `RamCheck` (`src-tauri/src/commands.rs`)
 - `LaunchResult` (`src-tauri/src/commands.rs`)
 - `KillResult` (`src-tauri/src/launcher.rs`)
 
-Los 16 campos que antes tenían claves snake_case conservan `#[serde(alias = "...")]`, de modo que un `instance.json` legacy sigue siendo legible. Se actualizaron `frontend/src/types.ts`, `InstanceCard.tsx` y `SettingsView.tsx`. Los nombres de comandos (`list_instances`, etc.) permanecen snake_case porque son identificadores de `invoke`, no campos serializados; los argumentos siguen camelCase.
+Los 9 campos que hoy requieren compatibilidad con claves snake_case conservan `#[serde(alias = "...")]`, de modo que un `instance.json` legacy sigue siendo legible. Se actualizaron `frontend/src/types.ts`, `InstanceCard.tsx` y `SettingsView.tsx`. Los nombres de comandos (`list_instances`, etc.) permanecen snake_case porque son identificadores de `invoke`, no campos serializados; los argumentos siguen camelCase.
 
 ### Tests de regresión añadidos
 
 - `instance_wire_fields_are_camel_case_and_legacy_aliases_work`
-- `instance_summary_wire_fields_are_camel_case_and_legacy_aliases_work`
 - `ram_check_wire_fields_are_camel_case_and_legacy_alias_works`
 - `launch_result_wire_fields_are_camel_case`
 - `kill_result_wire_fields_are_camel_case`
 
-Cada test serializa la struct y comprueba que ninguna clave contiene `_`; los tres primeros deserializan además un JSON legacy con todas las claves snake_case y verifican los aliases. Estos 5 tests llevaron el total de 29 a 34; los 2 tests de regresión de call-sites de RAM del anexo lo dejan en 36.
+Cada test serializa la struct y comprueba que ninguna clave contiene `_`; los dos primeros deserializan además un JSON legacy con todas las claves snake_case y verifican los aliases. En esa ronda estos 4 tests llevaron el total de 29 a 33 y los 2 tests de regresión de call-sites de RAM lo dejaron en 35; tras los Quick Wins el total vigente es 37.
 
 ### Guardia y grep final
 
@@ -89,10 +95,10 @@ Cada test serializa la struct y comprueba que ninguna clave contiene `_`; los tr
 
 ```text
 $ python3 scripts/check_ipc_camel_case.py
-IPC_STRUCTS_CHECKED=5
-IPC_STRUCTS=Instance,InstanceSummary,RamCheck,LaunchResult,KillResult
+IPC_STRUCTS_CHECKED=4
+IPC_STRUCTS=Instance,RamCheck,LaunchResult,KillResult
 IPC_WIRE_KEYS_CHECKED=16
-IPC_LEGACY_ALIASES_CHECKED=16
+IPC_LEGACY_ALIASES_CHECKED=9
 IPC_WIRE_SNAKE_CASE_KEYS=0
 TS_SNAKE_CASE_PROPERTIES=0
 SERDE_SNAKE_CASE_RENAMES=0
@@ -130,7 +136,7 @@ Ese job cerró #4/#5/#6 en el run `40444478091` sobre `9f79eb08da974aaac03df5212
 
 ## 6. Verificación final
 
-La corrida final, el SHA exacto de la rama y el estado `ready` del PR #7 se congelan en la descripción del PR y en `git notes` después de que la matriz termine. Antes de reportar verde se comprueban por API: tres jobs `success`, 34 tests unitarios por job (36 tests en código menos los 2 smoke de red filtrados en el paso unitario), smoke Adoptium 1/1 en los 3 SO, smoke Mojang 1/1 en Linux (por diseño), `IPC_WIRE_STATUS=OK`, `NON_PERSISTED_DISK_REFS=0` y `SMOKE_STARTUP_STATUS=OK` en los 3 SO.
+La corrida final, el SHA exacto de la rama y el estado `ready` del PR #7 se congelan en la descripción del PR y en `git notes` después de que la matriz termine. Antes de reportar verde se comprueban por API: tres jobs `success`, 35 tests unitarios por job (37 tests en código menos los 2 smoke de red filtrados en el paso unitario), smoke Adoptium 1/1 en los 3 SO, smoke Mojang 1/1 en Linux (por diseño), `IPC_WIRE_STATUS=OK`, `NON_PERSISTED_DISK_REFS=0` y `SMOKE_STARTUP_STATUS=OK` en los 3 SO.
 
 ---
 

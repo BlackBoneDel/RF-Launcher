@@ -14,6 +14,12 @@ operativos (Windows / macOS / Linux).
 > cable mixto o `Warn` al 100 % quedan superadas. Fuentes normativas:
 > `README.md`, `src-tauri/tauri.conf.json`, `frontend/src/types.ts` y
 > `src-tauri/src/ram.rs`.
+>
+> **Actualización Quick Wins (pre-Fase 3-B):** la matriz vigente usa
+> `ubuntu-24.04` y `Cargo.lock` versionado con `--locked`. Tras esta ronda hay
+> **37 tests en código**: **35 unitarios por job** más 2 smoke de red. Los
+> recuentos de 27/29 tests y las referencias a `ubuntu-22.04` que siguen en
+> este informe son históricos de la corrida de Fase 3-A, no del estado actual.
 
 - **Corrida definitiva con el informe ya en el árbol (`2778620`):**
   [run 40239118850](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40239118850)
@@ -90,10 +96,9 @@ dist/assets/index-CRf2h6et.js   243.45 kB │ gzip: 75.24 kB
 | 8 | Temas claro/oscuro persistentes | `src-tauri/src/commands.rs` (`get_theme`/`set_theme`), `frontend/src/components/ThemeToggle.tsx` | tema guardado como clave `Theme` del mismo motor jerárquico |
 | 9 | CI matrix con evidencia separada por SO | `.github/workflows/ci.yml` | anotaciones `evidence-*` por check-run (ver §5) |
 
-**Tests:** 27 en total. En la corrida final, Windows y macOS ejecutaron **25 passed / 0 failed**;
-Ubuntu ejecutó **25 passed / 0 failed / 2 filtered** (los 2 filtrados son los smoke
-tests de red, que se ejecutan aparte: **1 passed** cada uno). Los 2 tests de red
-están bajo `#[cfg(target_os = "linux")]`, por eso no existen en Windows/macOS.
+**Tests (estado vigente):** 37 en código: 35 unitarios por job en los 3 SO y 2
+smoke de red ejecutados aparte. Los números antiguos de esta sección (27 en
+total, 25 passed) corresponden a la corrida histórica de Fase 3-A.
 
 Límites respetados: sin mods/modpacks/loaders extra (solo Fabric básico), sin
 cuentas/OAuth, sin RF Client ni repositorio hermano, sin plantilla hardcodeada,
@@ -131,13 +136,13 @@ sin lógica de negocio en React.
 ## 4. Soluciones realistas aplicadas
 
 - **Verificación multiplataforma delegada a GitHub Actions.** Matriz
-  `windows-latest` / `macos-latest` / `ubuntu-22.04` con `fail-fast: false`,
-  `cargo build --release`, `cargo test`, build de frontend, smoke tests y
+  `windows-latest` / `macos-latest` / `ubuntu-24.04` con `fail-fast: false`,
+  `cargo build --locked --release`, `cargo test --locked`, build de frontend, smoke tests y
   medición de RAM. No se aceptó "compiló en mi máquina": el backend nunca
   compiló en este sandbox y así se declara.
-- **Excepción razonada de `ubuntu-latest` → `ubuntu-22.04`.** Documentada en
-  el propio YAML y en el README. Es la única forma de verificar Tauri 1 de
-  verdad en Linux sin migrar a Tauri 2 (fuera del alcance de la fase).
+- **Runner Linux fijo `ubuntu-24.04`.** Se migró junto con Tauri 2; es la
+  imagen que provee `libwebkit2gtk-4.1-dev` sin depender de la etiqueta móvil
+  `ubuntu-latest`.
 - **Canal de diagnóstico alternativo a los logs.** El workflow publica
   anotaciones `::error title=cargo-log-N::` en fallos y `::notice
   title=evidence-*::` siempre. Las anotaciones SÍ se leen por API:
@@ -154,13 +159,13 @@ sin lógica de negocio en React.
 
 ## 5. Tres links / logs separados por plataforma
 
-Corrida final verde, commit `30c3d015`:
+Corrida **histórica** verde de Fase 3-A, commit `30c3d015`:
 
 | SO | Job (log) | Anotaciones (API, legibles) | Resultado |
 |---|---|---|---|
 | Windows Server 2025 | [job 121305448146](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40238629977/job/121305448146) | [annotations](https://api.github.com/repos/BlackBoneDel/RF-Launcher/check-runs/121305448146/annotations) | `25 passed; 0 failed` · `RAM_FISICA_MB=16378` |
 | macOS 26.6.2 arm64 | [job 121305448290](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40238629977/job/121305448290) | [annotations](https://api.github.com/repos/BlackBoneDel/RF-Launcher/check-runs/121305448290/annotations) | `25 passed; 0 failed` · `RAM_FISICA_MB=7168` |
-| Ubuntu 22.04 (Linux 6.8.0-azure) | [job 121305448272](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40238629977/job/121305448272) | [annotations](https://api.github.com/repos/BlackBoneDel/RF-Launcher/check-runs/121305448272/annotations) | `25 passed; 0 failed` · 2 smoke `1 passed` · `RAM_FISICA_MB=15988` · VmRSS 91500 kB |
+| Ubuntu 22.04 (histórico; Linux 6.8.0-azure) | [job 121305448272](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40238629977/job/121305448272) | [annotations](https://api.github.com/repos/BlackBoneDel/RF-Launcher/check-runs/121305448272/annotations) | `25 passed; 0 failed` · 2 smoke `1 passed` · `RAM_FISICA_MB=15988` · VmRSS 91500 kB |
 
 Run completo: [40238629977](https://github.com/BlackBoneDel/RF-Launcher/actions/runs/40238629977).
 
@@ -358,8 +363,8 @@ uno con los pasos 7–10 (npm ci, build frontend, `cargo build --release`,
 
 **Sospechas que quedan abiertas (no barridas bajo la alfombra):**
 
-- La matriz usa `ubuntu-22.04`, no `ubuntu-latest`; es una excepción razonada,
-  pero significa que no se ha verificado Ubuntu 24.04.
+- La matriz usa `ubuntu-24.04` fijo, no `ubuntu-latest`; es la imagen ya
+  verificada con Tauri 2 y `libwebkit2gtk-4.1-dev`.
 - El smoke test de red (descarga real de JDK 21 desde Adoptium + `java
   -version`) se ejecutó **sólo en Linux** (15.60 s, 1 passed). Windows y macOS
   verificaron compilación y tests unitarios, no descarga real.
@@ -377,7 +382,7 @@ uno con los pasos 7–10 (npm ci, build frontend, `cargo build --release`,
 cd frontend && npm ci && npx tsc --noEmit && npm run build
 
 # Backend (requiere Rust + dependencias de sistema de Tauri 1)
-cd src-tauri && cargo build --release && cargo test
+cd src-tauri && cargo build --locked --release && cargo test --locked
 
 # Evidencia de la corrida final (anotaciones legibles por API)
 gh api repos/BlackBoneDel/RF-Launcher/actions/runs/40238629977/jobs

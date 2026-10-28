@@ -1,0 +1,3 @@
+# Cargo.lock es un artefacto de build reproducible: evitar que el checkout de
+# Windows lo convierta a CRLF y cambie su SHA-256 sin cambiar dependencias.
+src-tauri/Cargo.lock text eol=lf
