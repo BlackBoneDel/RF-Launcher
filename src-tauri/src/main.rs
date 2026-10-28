@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod catalog;
 mod commands;
 mod config;
 mod error;
@@ -64,9 +65,13 @@ fn main() {
             commands::list_instances,
             commands::get_instance,
             commands::create_instance,
+            commands::update_instance,
+            commands::delete_instance,
             commands::resolve_config,
             commands::set_global_config,
             commands::set_instance_config,
+            commands::clear_instance_config,
+            commands::get_global_config,
             commands::get_system_ram,
             commands::launch_instance,
             commands::kill_instance,

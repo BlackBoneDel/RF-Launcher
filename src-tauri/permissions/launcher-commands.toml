@@ -61,3 +61,23 @@ commands.allow = ["launch_instance"]
 identifier = "allow-kill-instance"
 description = "Permite detener una instancia."
 commands.allow = ["kill_instance"]
+
+[[permission]]
+identifier = "allow-update-instance"
+description = "Permite editar una instancia existente."
+commands.allow = ["update_instance"]
+
+[[permission]]
+identifier = "allow-delete-instance"
+description = "Permite eliminar una instancia y su carpeta."
+commands.allow = ["delete_instance"]
+
+[[permission]]
+identifier = "allow-clear-instance-config"
+description = "Permite quitar un override y volver al valor global."
+commands.allow = ["clear_instance_config"]
+
+[[permission]]
+identifier = "allow-get-global-config"
+description = "Permite leer un valor de configuración global."
+commands.allow = ["get_global_config"]

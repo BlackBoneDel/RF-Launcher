@@ -20,6 +20,14 @@ zip = { version = "1", features = ["deflate"] }
 sha2 = "0.10"
 sha1 = "0.10"
 thiserror = "1"
+tokio = { version = "1", features = ["rt"] }
+
+[features]
+default = []
+# Hooks de prueba compilados SOLO en el job E2E de Linux. El binario de Release
+# no incluye ni plugins WDIO ni atajos de red.
+e2e = []
+custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -1,0 +1,63 @@
+{
+  "sourceUrl": "https://meta.fabricmc.net/v2/versions/loader/1.21.1",
+  "fetchedAt": "2026-10-28T11:50:43Z",
+  "sha256": "c2662641bf42ed96aa8bdb949917ae1c4f940dd3f62b415a636d1dedd12694c5",
+  "payload": [
+    {
+      "loader": {
+        "separator": ".",
+        "build": 1,
+        "maven": "net.fabricmc:fabric-loader:0.20.1",
+        "version": "0.20.1",
+        "stable": true
+      },
+      "intermediary": {
+        "maven": "net.fabricmc:intermediary:1.21.1",
+        "version": "1.21.1",
+        "stable": true
+      },
+      "launcherMeta": {
+        "version": 2,
+        "min_java_version": 8,
+        "libraries": {
+          "client": [],
+          "common": [],
+          "server": [],
+          "development": []
+        },
+        "mainClass": {
+          "client": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+          "server": "net.fabricmc.loader.impl.launch.knot.KnotServer"
+        }
+      }
+    },
+    {
+      "loader": {
+        "separator": ".",
+        "build": 0,
+        "maven": "net.fabricmc:fabric-loader:0.20.0",
+        "version": "0.20.0",
+        "stable": false
+      },
+      "intermediary": {
+        "maven": "net.fabricmc:intermediary:1.21.1",
+        "version": "1.21.1",
+        "stable": true
+      },
+      "launcherMeta": {
+        "version": 2,
+        "min_java_version": 8,
+        "libraries": {
+          "client": [],
+          "common": [],
+          "server": [],
+          "development": []
+        },
+        "mainClass": {
+          "client": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+          "server": "net.fabricmc.loader.impl.launch.knot.KnotServer"
+        }
+      }
+    }
+  ]
+}

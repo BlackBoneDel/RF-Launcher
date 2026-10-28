@@ -1,4 +1,6 @@
 use std::fs;
+use std::collections::HashSet;
+use std::time::Duration;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,8 +11,8 @@ use sha1::{Digest, Sha1};
 use crate::error::{LauncherError, Result};
 
 const MOJANG_VERSION_MANIFEST: &str =
-    "https://launchermeta.mojang.com/mc/game/version_manifest.json";
-const FABRIC_MAVEN: &str = "https://maven.fabricmc.net/net/fabricmc/fabric-loader";
+    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+const FABRIC_META: &str = "https://meta.fabricmc.net/v2/versions/loader";
 
 /// Datos resueltos para lanzar una versión de Minecraft (vanilla o con Fabric).
 pub struct ResolvedLaunch {
@@ -51,6 +53,17 @@ pub async fn resolve(
     minecraft_version: &str,
     fabric_loader: Option<&str>,
 ) -> Result<ResolvedLaunch> {
+    // Hook E2E (solo con --features e2e): evita red/juegos reales en CI pero
+    // conserva el resto del pipeline (Java, RAM, spawn y kill) contra un
+    // proceso del sistema operativo real.
+    #[cfg(feature = "e2e")]
+    if std::env::var_os("RF_LAUNCHER_E2E_MINECRAFT_FIXTURE").is_some() {
+        return resolve_fixture(instances_dir, instance_id);
+    }
+
+    if !minecraft_version.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c)) || minecraft_version.is_empty() || minecraft_version == "." || minecraft_version == ".." {
+        return Err("versión de Minecraft inválida".into());
+    }
     fs::create_dir_all(assets_dir)?;
     let version_dir = assets_dir.join("versions").join(minecraft_version);
     fs::create_dir_all(&version_dir)?;
@@ -90,9 +103,9 @@ pub async fn resolve(
     let version_json: Value = serde_json::from_str(&version_json_text)?;
 
     let main_class = version_json
-        .get("main_class")
+        .get("mainClass")
         .and_then(|v| v.as_str())
-        .ok_or("version_json sin main_class")?
+        .ok_or("version_json sin mainClass")?
         .to_string();
 
     // 3. Librerías: filtrar por reglas de SO, descargar artefactos, construir classpath.
@@ -114,7 +127,7 @@ pub async fn resolve(
         // Artefacto principal
         if let Some(artifact) = downloads.and_then(|d| d.get("artifact")) {
             if let Some(url) = artifact.get("url").and_then(|v| v.as_str()) {
-                let path = lib
+                let path = artifact
                     .get("path")
                     .and_then(|v| v.as_str())
                     .ok_or("librería sin path")?;
@@ -154,20 +167,33 @@ pub async fn resolve(
     download_file(client_url, &client_jar, client_sha1).await?;
     classpath.push(client_jar.clone());
 
-    // 5. Fabric Loader: su jar va al frente del classpath y su main class
-    //    reemplaza a la de vanilla, recibiendo la original por propiedad de sistema.
+    // Fabric Meta expone un perfil que incluye launcherMeta.libraries (common
+    // y client), intermediary y loader, además de la mainClass del cliente.
     let (main_class, jvm_args) = if let Some(loader_version) = fabric_loader {
-        let loader_jar = assets_dir
-            .join("fabric-loader")
-            .join(format!("fabric-loader-{loader_version}.jar"));
-        fs::create_dir_all(loader_jar.parent().unwrap())?;
-        if !loader_jar.exists() {
-            let loader_url = format!("{FABRIC_MAVEN}/{loader_version}/fabric-loader-{loader_version}.jar");
-            download_file(&loader_url, &loader_jar, None).await?;
+        if loader_version.is_empty() || loader_version == "." || loader_version == ".." || !loader_version.chars().all(|c| c.is_ascii_alphanumeric() || ".-_+".contains(c)) {
+            return Err("versión Fabric inválida".into());
         }
-        classpath.insert(0, loader_jar);
-        let extra = vec![format!("-Dfabric.mainClass={main_class}")];
-        ("net.fabricmc.loader.impl.launch.knot.KnotClient".to_string(), extra)
+        let url = format!("{FABRIC_META}/{minecraft_version}/{loader_version}/profile/json");
+        let profile: Value = reqwest::Client::new().get(&url).send().await?.error_for_status()?.json().await?;
+        let fabric_main = profile.get("mainClass").and_then(Value::as_str).ok_or("Fabric sin mainClass")?.to_string();
+        let libs = profile.get("libraries").and_then(Value::as_array).ok_or("Fabric sin libraries")?;
+        let mut fabric_paths = Vec::new();
+        for lib in libs {
+            let name = lib.get("name").and_then(Value::as_str).ok_or("Fabric sin coordenada Maven")?;
+            let parts: Vec<_> = name.split(':').collect();
+            if parts.len() != 3 || parts.iter().any(|p| p.is_empty() || *p == "." || *p == ".." || !p.chars().all(|c| c.is_ascii_alphanumeric() || ".-_+".contains(c))) {
+                return Err(format!("coordenada Maven inválida: {name}").into());
+            }
+            let relative = format!("{}/{}/{}/{}-{}.jar", parts[0].replace('.', "/"), parts[1], parts[2], parts[1], parts[2]);
+            let base = lib.get("url").and_then(Value::as_str).unwrap_or("https://maven.fabricmc.net/");
+            if base != "https://maven.fabricmc.net/" { return Err("repositorio Fabric no permitido".into()); }
+            let dest = lib_dir.join(&relative);
+            download_file(&format!("{base}{relative}"), &dest, lib.get("sha1").and_then(Value::as_str)).await?;
+            fabric_paths.push(dest);
+        }
+        fabric_paths.extend(classpath);
+        classpath = fabric_paths;
+        (fabric_main, Vec::new())
     } else {
         (main_class, Vec::new())
     };
@@ -175,24 +201,22 @@ pub async fn resolve(
     // 7. Contexto de sustitución de placeholders (se construye antes de resolver
     //    los argumentos JVM y del juego).
     let game_dir = instances_dir.join(instance_id.to_string()).join("minecraft");
-    let assets_index = version_json
-        .get("assetIndex")
-        .and_then(|v| v.get("id"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("1.20")
-        .to_string();
-    // El índice debe vivir en <assets_root>/indexes/<id>.json (los objetos
-    // los descarga el propio cliente bajo demanda).
-    if let Some(ai) = version_json.get("assetIndex").and_then(|v| v.get("url")) {
-        if let Some(url) = ai.as_str() {
-            let _ = download_file(
-                url,
-                &assets_dir.join("indexes").join(format!("{assets_index}.json")),
-                None,
-            )
-            .await;
-        }
+    let asset_index = version_json.get("assetIndex").ok_or("versión sin assetIndex")?;
+    let assets_index = asset_index.get("id").and_then(Value::as_str).ok_or("assetIndex sin id")?.to_string();
+    if assets_index.is_empty() || assets_index == "." || assets_index == ".." ||
+        !assets_index.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c)) {
+        return Err("id de índice de assets inválido".into());
     }
+    let index_url = asset_index.get("url").and_then(Value::as_str).ok_or("assetIndex sin URL")?;
+    let index_sha = asset_index.get("sha1").and_then(Value::as_str).ok_or("assetIndex sin SHA-1")?;
+    let index_path = assets_dir.join("indexes").join(format!("{assets_index}.json"));
+    // download_file ignora ficheros existentes; validar explícitamente el índice cacheado.
+    if index_path.exists() && !sha1_of_file(&index_path)?.eq_ignore_ascii_case(index_sha) {
+        fs::remove_file(&index_path)?;
+    }
+    download_file(index_url, &index_path, Some(index_sha)).await?;
+    let index: Value = serde_json::from_reader(fs::File::open(index_path)?)?;
+    download_assets(&index, assets_dir, "https://resources.download.minecraft.net").await?;
 
     let ctx = LaunchContext {
         version_name: minecraft_version.to_string(),
@@ -204,9 +228,12 @@ pub async fn resolve(
         game_directory: game_dir.clone(),
         assets_root: assets_dir.to_path_buf(),
         assets_index_name: assets_index,
+        // Placeholder de identidad offline — NO es sistema de cuentas,
+        // reservado a Fase 3-C. Minecraft exige estos argumentos incluso sin
+        // login; aquí son valores neutros, no credenciales niOAuth.
         auth_player_name: "Player".to_string(),
         auth_uuid: "00000000-0000-0000-0000-000000000000".to_string(),
-        auth_access_token: String::new(),
+        auth_access_token: "0".to_string(),
         user_type: "mojang".to_string(),
         user_properties: "{}".to_string(),
         resolution_width: "854".to_string(),
@@ -218,13 +245,21 @@ pub async fn resolve(
 
     // 6. Argumentos JVM: quitar flags de memoria existentes (nosotros los ponemos al lanzar).
     //    Se resuelven con el contexto real para que ${natives_directory} etc. se sustituyan.
-    let mut jvm_args_all: Vec<String> = version_json
+    let jvm_args_all: Vec<String> = version_json
         .get("arguments")
         .and_then(|a| a.get("jvm"))
         .and_then(|v| v.as_array())
         .map(|arr| resolve_json_args(arr, &ctx))
         .unwrap_or_default();
-    jvm_args_all.retain(|a| !(a.starts_with("-Xms") || a.starts_with("-Xmx")));
+    let mut clean_jvm = Vec::new();
+    let mut skip_next = false;
+    for arg in jvm_args_all {
+        if skip_next { skip_next = false; continue; }
+        if arg == "-cp" || arg == "-classpath" { skip_next = true; continue; }
+        if arg.starts_with("-Xms") || arg.starts_with("-Xmx") { continue; }
+        clean_jvm.push(arg);
+    }
+    let mut jvm_args_all = clean_jvm;
     jvm_args_all.extend(jvm_args);
 
     fs::create_dir_all(&game_dir)?;
@@ -247,6 +282,13 @@ pub async fn resolve(
             .unwrap_or_default(),
     };
 
+    // Rechazar argumentos desconocidos antes de crear un proceso con datos rotos.
+    for arg in jvm_args_all.iter().chain(game_args.iter()) {
+        if arg.contains("${") {
+            return Err(LauncherError::Custom(format!("placeholder de lanzamiento sin resolver: {arg}")));
+        }
+    }
+
     let log_file = instances_dir
         .join(instance_id.to_string())
         .join("logs")
@@ -263,29 +305,35 @@ pub async fn resolve(
     })
 }
 
+/// Resuelve datos mínimos para el E2E: el "java" fixture ignora los argumentos
+/// y se mantiene vivo hasta que `kill_instance` lo termine por PID.
+#[cfg(feature = "e2e")]
+fn resolve_fixture(instances_dir: &Path, instance_id: &uuid::Uuid) -> Result<ResolvedLaunch> {
+    let game_dir = instances_dir.join(instance_id.to_string()).join("minecraft");
+    let log_file = instances_dir
+        .join(instance_id.to_string())
+        .join("logs")
+        .join("launch-e2e.log");
+    fs::create_dir_all(&game_dir)?;
+    if let Some(parent) = log_file.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(ResolvedLaunch {
+        main_class: "rf.launcher.e2e.FakeMinecraft".to_string(),
+        jvm_args: Vec::new(),
+        game_args: Vec::new(),
+        classpath: Vec::new(),
+        working_dir: game_dir,
+        log_file,
+    })
+}
+
 /// Reglas de inclusión de librerías de Mojang.
 fn rules_apply(lib: &Value) -> bool {
-    let Some(rules) = lib.get("rules").and_then(|v| v.as_array()) else {
-        return true;
-    };
-    let mut allowed = true;
-    for rule in rules {
-        let action = rule.get("action").and_then(|v| v.as_str()).unwrap_or("allow");
-        let os = rule.get("os").and_then(|v| v.as_object());
-        let os_matches = os.map_or(true, |os| {
-            let name_ok = os.get("name").and_then(|v| v.as_str()).map_or(true, |name| {
-                matches_os(name)
-            });
-            let arch_ok = os.get("arch").and_then(|v| v.as_str()).map_or(true, |arch| {
-                arch == target_arch()
-            });
-            name_ok && arch_ok
-        });
-        if os_matches {
-            allowed = action == "allow";
-        }
+    match lib.get("rules") {
+        None => true,
+        Some(rules) => rules_apply_value(rules),
     }
-    allowed
 }
 
 fn matches_os(name: &str) -> bool {
@@ -323,6 +371,78 @@ fn classpath_to_string(classpath: &[PathBuf]) -> String {
         .map(|p| p.to_string_lossy().to_string())
         .collect::<Vec<_>>()
         .join(sep)
+}
+
+/// Descarga objetos únicos del índice con concurrencia limitada y verifica tanto
+/// caché como descarga antes de publicar. Nunca se confía en el nombre del fichero.
+async fn download_assets(index: &Value, root: &Path, base: &str) -> Result<()> {
+    let objects = index.get("objects").and_then(Value::as_object).ok_or("índice de assets sin objects")?;
+    let mut hashes = HashSet::new();
+    for object in objects.values() {
+        let hash = object.get("hash").and_then(Value::as_str).ok_or("objeto de asset sin hash")?;
+        if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("SHA-1 de asset inválido".into());
+        }
+        hashes.insert(hash.to_ascii_lowercase());
+    }
+    let total = hashes.len();
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(60)).build()?;
+    let mut tasks = tokio::task::JoinSet::new();
+    let mut downloaded = 0usize;
+    let mut cached = 0usize;
+    let mut first_error = None;
+    for hash in hashes {
+        let client = client.clone();
+        let dest = root.join("objects").join(&hash[..2]).join(&hash);
+        let url = format!("{}/{}/{}", base.trim_end_matches('/'), &hash[..2], hash);
+        tasks.spawn(async move { download_asset(&client, &url, &dest, &hash).await });
+        if tasks.len() >= 16 {
+            record_asset_result(tasks.join_next().await, &mut downloaded, &mut cached, &mut first_error);
+        }
+    }
+    while !tasks.is_empty() {
+        record_asset_result(tasks.join_next().await, &mut downloaded, &mut cached, &mut first_error);
+    }
+    if let Some(error) = first_error { return Err(error); }
+    println!("ASSETS_SHA1_VERIFIED total={total} downloaded={downloaded} cached={cached}");
+    Ok(())
+}
+
+fn record_asset_result(result: Option<std::result::Result<Result<bool>, tokio::task::JoinError>>,
+    downloaded: &mut usize, cached: &mut usize, first_error: &mut Option<LauncherError>) {
+    match result {
+        Some(Ok(Ok(true))) => *downloaded += 1,
+        Some(Ok(Ok(false))) => *cached += 1,
+        Some(Ok(Err(error))) => { if first_error.is_none() { *first_error = Some(error); } },
+        Some(Err(error)) => { if first_error.is_none() { *first_error = Some(format!("tarea de asset: {error}").into()); } },
+        None => { if first_error.is_none() { *first_error = Some("tarea de asset ausente".into()); } },
+    }
+}
+
+async fn download_asset(client: &reqwest::Client, url: &str, dest: &Path, expected: &str) -> Result<bool> {
+    if dest.is_file() && sha1_of_file(dest)?.eq_ignore_ascii_case(expected) { return Ok(false); }
+    fs::create_dir_all(dest.parent().ok_or("asset sin directorio")?)?;
+    let tmp = dest.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let result: Result<()> = async {
+        let mut response = client.get(url).send().await?.error_for_status()?;
+        let mut file = fs::File::create(&tmp)?;
+        let mut hasher = Sha1::new();
+        while let Some(chunk) = response.chunk().await? {
+            hasher.update(&chunk);
+            file.write_all(&chunk)?;
+        }
+        drop(file);
+        let actual = hex_encode(&hasher.finalize());
+        if actual != expected { return Err(format!("SHA-1 incorrecto para asset {expected}: {actual}").into()); }
+        // Windows no reemplaza un archivo existente con rename; mantener el
+        // objeto anterior hasta que el temporal haya sido verificado.
+        if dest.exists() { fs::remove_file(dest)?; }
+        fs::rename(&tmp, dest)?;
+        Ok(())
+    }.await;
+    if result.is_err() { let _ = fs::remove_file(&tmp); }
+    result?;
+    Ok(true)
 }
 
 /// Descarga un fichero si no existe localmente, verificando SHA-1 si se provee.
@@ -414,7 +534,7 @@ fn resolve_json_args(args: &[Value], ctx: &LaunchContext) -> Vec<String> {
 fn rules_apply_value(rules: &Value) -> bool {
     let empty: Vec<Value> = Vec::new();
     let arr = rules.as_array().unwrap_or(&empty);
-    let mut allowed = true;
+    let mut allowed = false;
     for rule in arr {
         let action = rule.get("action").and_then(|v| v.as_str()).unwrap_or("allow");
         let os = rule.get("os").and_then(|v| v.as_object());
@@ -423,7 +543,10 @@ fn rules_apply_value(rules: &Value) -> bool {
             let arch_ok = os.get("arch").and_then(|v| v.as_str()).map_or(true, |arch| arch == target_arch());
             name_ok && arch_ok
         });
-        if os_matches {
+        // Las features de Mojang son falsas si el launcher no las activa.
+        let features_match = rule.get("features").and_then(Value::as_object)
+            .map_or(true, |features| features.values().all(|v| v.as_bool() == Some(false)));
+        if os_matches && features_match {
             allowed = action == "allow";
         }
     }
@@ -442,6 +565,11 @@ fn substitute(arg: &str, ctx: &LaunchContext) -> String {
     repl!("${auth_uuid}", ctx.auth_uuid);
     repl!("${auth_access_token}", ctx.auth_access_token);
     repl!("${auth_session}", ctx.auth_access_token);
+    // Placeholder de identidad offline — NO es sistema de cuentas, reservado a Fase 3-C.
+    repl!("${clientid}", "0");
+    repl!("${auth_xuid}", "0");
+    repl!("${launcher_name}", "rf-launcher");
+    repl!("${launcher_version}", env!("CARGO_PKG_VERSION"));
     repl!("${user_type}", ctx.user_type);
     repl!("${user_properties}", ctx.user_properties);
     repl!("${version_name}", ctx.version_name);
@@ -468,6 +596,52 @@ fn now_secs() -> u64 {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn assets_validate_cache_and_reject_corruption() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        let payload = b"asset real fixture";
+        let hash = hex_encode(&Sha1::digest(payload));
+        let index = serde_json::json!({"objects": {
+            "one": {"hash": hash}, "duplicate": {"hash": hash}
+        }});
+        let invalid = serde_json::json!({"objects": {"bad": {"hash": "../bad"}}});
+        let temp = std::env::temp_dir().join(format!("rf-assets-{}", uuid::Uuid::new_v4()));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let count = requests.clone();
+        let server = std::thread::spawn(move || {
+            for stream in listener.incoming().take(3) {
+                let mut stream = stream.unwrap();
+                let mut buf = [0; 4096];
+                let _ = stream.read(&mut buf).unwrap();
+                let n = count.fetch_add(1, Ordering::SeqCst);
+                let body: &[u8] = if n < 2 { payload } else { b"incorrect" };
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+        download_assets(&index, &temp, &base).await.unwrap();
+        let dest = temp.join("objects").join(&hash[..2]).join(&hash);
+        assert_eq!(sha1_of_file(&dest).unwrap(), hash);
+        download_assets(&index, &temp, &base).await.unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 1, "caché válido no debe solicitar red");
+        fs::write(&dest, b"corrupt cache").unwrap();
+        download_assets(&index, &temp, &base).await.unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        assert_eq!(sha1_of_file(&dest).unwrap(), hash);
+        fs::write(&dest, b"corrupt cache").unwrap();
+        assert!(download_assets(&index, &temp, &base).await.is_err(), "respuesta con SHA-1 incorrecto debe fallar");
+        assert_eq!(fs::read(&dest).unwrap(), b"corrupt cache", "no publicar descarga incorrecta");
+        assert_eq!(fs::read_dir(dest.parent().unwrap()).unwrap().count(), 1, "temporal eliminado");
+        assert!(download_assets(&invalid, &temp, &base).await.is_err());
+        server.join().unwrap();
+        fs::remove_dir_all(temp).unwrap();
+        println!("ASSET_TEST=HTTP_SHA1_OK CACHE_REUSED CORRUPT_CACHE_REFETCH BAD_SHA_REJECTED");
+    }
+
     #[test]
     fn substitute_replaces_placeholders() {
         let ctx = LaunchContext {
@@ -491,10 +665,22 @@ mod tests {
             substitute("${version_name} ${auth_player_name}", &ctx),
             "1.20.1 Player"
         );
+        assert_eq!(substitute("${clientid} ${auth_xuid} ${launcher_name} ${launcher_version}", &ctx),
+            format!("0 0 rf-launcher {}", env!("CARGO_PKG_VERSION")));
         assert_eq!(
             substitute("--gameDir ${game_directory}", &ctx),
             "--gameDir /tmp/game"
         );
+    }
+
+    #[test]
+    fn rules_require_matching_os_and_features() {
+        let other = if cfg!(target_os = "macos") { "windows" } else { "osx" };
+        let rules = serde_json::json!([{ "action": "allow", "os": { "name": other }}]);
+        assert!(!rules_apply_value(&rules));
+        let features = serde_json::json!([{ "action": "allow", "features": { "is_demo_user": true }}]);
+        assert!(!rules_apply_value(&features));
+        println!("MOJANG_RULES_NONMATCH=DENIED FEATURES_UNSET=DENIED");
     }
 
     #[test]
@@ -505,7 +691,10 @@ mod tests {
                 { "action": "allow", "os": { "name": "windows" } }
             ]
         });
-        // target_arch() puede ser x64 o aarch64; sin restricción de arch pasa en cualquier arch
-        assert!(rules_apply(&lib));
+        // La lista permite Linux y Windows, pero no macOS.
+        assert_eq!(rules_apply(&lib), !cfg!(target_os = "macos"));
+        let current = if cfg!(target_os = "macos") { "osx" } else if cfg!(target_os = "windows") { "windows" } else { "linux" };
+        let matching = serde_json::json!({"rules": [{"action": "allow", "os": {"name": current}}]});
+        assert!(rules_apply(&matching));
     }
 }

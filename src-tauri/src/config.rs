@@ -73,6 +73,13 @@ impl ConfigValue {
             _ => None,
         }
     }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            ConfigValue::Bool(v) => Some(*v),
+            _ => None,
+        }
+    }
 }
 
 /// Configuración global del launcher (persistida en data_dir/config.json).

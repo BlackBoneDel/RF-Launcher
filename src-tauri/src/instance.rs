@@ -124,8 +124,82 @@ impl Instance {
         Ok(out)
     }
 
+    /// Actualiza los campos editables de una instancia ya creada.
+    pub fn update(
+        &mut self,
+        name: String,
+        minecraft_version: String,
+        fabric_loader: Option<String>,
+    ) -> Result<()> {
+        if name.trim().is_empty() {
+            return Err("El nombre de la instancia no puede estar vacío".into());
+        }
+        if minecraft_version.trim().is_empty() {
+            return Err("La versión de Minecraft no puede estar vacía".into());
+        }
+        self.name = name;
+        self.minecraft_version = minecraft_version;
+        self.fabric_loader = fabric_loader;
+        Ok(())
+    }
+
+    /// Inserta un override y mantiene sincronizados los campos `ram_*` que la
+    /// UI muestra. Sin esto, `set_instance_config` persistía el override pero
+    /// la tarjeta seguía diciendo "hereda global" (hallazgo de la Sección 0).
     pub fn set_override(&mut self, key: ConfigKey, value: ConfigValue) {
+        match key {
+            ConfigKey::RamMinMb => {
+                self.ram_min_mb = value.as_int().map(|v| v.max(0) as u64);
+            }
+            ConfigKey::RamMaxMb => {
+                self.ram_max_mb = value.as_int().map(|v| v.max(0) as u64);
+            }
+            _ => {}
+        }
         self.config_overrides.insert(key.as_str().to_string(), value);
+    }
+
+    /// Elimina un override y devuelve al estado "hereda global".
+    pub fn clear_override(&mut self, key: ConfigKey) -> bool {
+        match key {
+            ConfigKey::RamMinMb => self.ram_min_mb = None,
+            ConfigKey::RamMaxMb => self.ram_max_mb = None,
+            _ => {}
+        }
+        self.config_overrides.remove(key.as_str()).is_some()
+    }
+
+    /// Renombra primero en el mismo directorio; si la limpieza falla, la basura
+    /// permanece aislada con su ruta en el error, sin fingir borrado completo.
+    pub fn delete(instances_dir: &Path, id: &Uuid) -> Result<()> {
+        Self::delete_with(instances_dir, id, |from, to| fs::rename(from, to), |path| fs::remove_dir_all(path))
+    }
+
+    fn delete_with<R, D>(instances_dir: &Path, id: &Uuid, rename: R, remove: D) -> Result<()>
+    where
+        R: FnOnce(&Path, &Path) -> std::io::Result<()>,
+        D: FnOnce(&Path) -> std::io::Result<()>,
+    {
+        let dir = Self::dir(instances_dir, id);
+        let metadata = match fs::symlink_metadata(&dir) {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+            return Err("La instancia no es un directorio real; borrado abortado".into());
+        }
+        let root = fs::canonicalize(instances_dir)?;
+        let target = fs::canonicalize(&dir)?;
+        if target.parent() != Some(root.as_path()) {
+            return Err("Ruta de instancia fuera del directorio raíz; borrado abortado".into());
+        }
+        let trash = root.join(format!(".trash-{id}-{}", Uuid::new_v4()));
+        rename(&target, &trash)?;
+        remove(&trash).map_err(|e| LauncherError::Custom(format!(
+            "Instancia apartada pero limpieza incompleta en {}: {e}", trash.display()
+        )))?;
+        Ok(())
     }
 
     pub fn mark_launched(&mut self) {
@@ -208,6 +282,92 @@ mod tests {
         legacy.insert("template_origin".into(), serde_json::json!("legacy"));
         let back: Instance = serde_json::from_value(serde_json::Value::Object(legacy)).unwrap();
         assert_eq!(back.template_origin.as_deref(), Some("legacy"));
+    }
+
+    #[test]
+    fn override_syncs_ram_fields_and_clear_returns_to_global() {
+        let dir = std::env::temp_dir().join(format!("rf-override-sync-{}", now_secs()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("minecraft")).unwrap();
+        fs::create_dir_all(dir.join("logs")).unwrap();
+        let mut inst = Instance {
+            id: Uuid::new_v4(),
+            name: "x".into(),
+            minecraft_version: "1.21".into(),
+            fabric_loader: None,
+            template_origin: None,
+            config_overrides: Default::default(),
+            ram_min_mb: None,
+            ram_max_mb: None,
+            created_at: now_secs(),
+            last_launched_at: None,
+        };
+        inst.set_override(ConfigKey::RamMaxMb, ConfigValue::Int(4096));
+        assert_eq!(inst.ram_max_mb, Some(4096));
+        assert!(inst.clear_override(ConfigKey::RamMaxMb));
+        assert_eq!(inst.ram_max_mb, None);
+        assert!(!inst.config_overrides.contains_key("RamMaxMb"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_rejects_empty_name_and_changes_fields() {
+        let mut inst = Instance {
+            id: Uuid::new_v4(),
+            name: "a".into(),
+            minecraft_version: "1.21".into(),
+            fabric_loader: None,
+            template_origin: None,
+            config_overrides: Default::default(),
+            ram_min_mb: None,
+            ram_max_mb: None,
+            created_at: now_secs(),
+            last_launched_at: None,
+        };
+        assert!(inst.update("".into(), "1.21".into(), None).is_err());
+        inst.update("b".into(), "1.21.1".into(), Some("0.20.1".into())).unwrap();
+        assert_eq!(inst.name, "b");
+        assert_eq!(inst.minecraft_version, "1.21.1");
+        assert_eq!(inst.fabric_loader.as_deref(), Some("0.20.1"));
+    }
+
+    #[test]
+    fn delete_two_phase_failures_preserve_consistent_state() {
+        let root = temp_dir().join(format!("rf-delete-{}", Uuid::new_v4()));
+        let id = Uuid::new_v4();
+        let dir = Instance::dir(&root, &id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("instance.json"), "intact").unwrap();
+        fs::write(dir.join("already-deleted"), "delete me").unwrap();
+        let failed = Instance::delete_with(&root, &id,
+            |_, _| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "simulated rename failure")),
+            |_| panic!("remove must not run"));
+        assert!(failed.is_err());
+        assert_eq!(fs::read_to_string(dir.join("instance.json")).unwrap(), "intact");
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        println!("DELETE_RENAME_FAILURE=ORIGINAL_INTACT NO_TRASH");
+        let failed = Instance::delete_with(&root, &id, |a, b| fs::rename(a, b),
+            |trash| {
+                fs::remove_file(trash.join("already-deleted"))?;
+                Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "simulated mid-cleanup failure"))
+            });
+        assert!(failed.is_err());
+        assert!(!dir.exists());
+        let trash = fs::read_dir(&root).unwrap().next().unwrap().unwrap().path();
+        assert!(trash.file_name().unwrap().to_string_lossy().starts_with(".trash-"));
+        assert_eq!(fs::read_to_string(trash.join("instance.json")).unwrap(), "intact");
+        assert!(!trash.join("already-deleted").exists());
+        println!("DELETE_CLEANUP_FAILURE=ISOLATED_TRASH FILE_DELETED OTHER_FILE_REMAINS ERROR_REPORTED");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_refuses_path_outside_instances_root() {
+        let root = std::env::temp_dir().join(format!("rf-delete-root-{}", now_secs()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        assert!(Instance::delete(&root, &Uuid::new_v4()).is_ok());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

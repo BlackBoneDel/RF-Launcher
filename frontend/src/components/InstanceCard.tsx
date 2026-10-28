@@ -1,6 +1,24 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Play, Square, RefreshCw, Settings2, ChevronDown, ChevronUp } from 'lucide-react';
-import { launchInstance, killInstance, resolveConfig, setInstanceConfig } from '../lib/tauri';
+import {
+  Play,
+  Square,
+  RefreshCw,
+  Settings2,
+  ChevronDown,
+  ChevronUp,
+  Pencil,
+  Trash2,
+  X,
+} from 'lucide-react';
+import {
+  launchInstance,
+  killInstance,
+  resolveConfig,
+  setInstanceConfig,
+  clearInstanceConfig,
+  updateInstance,
+  deleteInstance,
+} from '../lib/tauri';
 import type { ConfigKey, ConfigValue, Instance } from '../types';
 
 type Props = {
@@ -42,6 +60,13 @@ export function InstanceCard({ instance, onStatusChange }: Props) {
   const [pendingForce, setPendingForce] = useState<{ key: ConfigKey; value: ConfigValue } | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const [showEdit, setShowEdit] = useState(false);
+  const [editName, setEditName] = useState(instance.name);
+  const [editMc, setEditMc] = useState(instance.minecraftVersion);
+  const [editUseFabric, setEditUseFabric] = useState(instance.fabricLoader != null);
+  const [editFabric, setEditFabric] = useState(instance.fabricLoader ?? '');
+  const [showDelete, setShowDelete] = useState(false);
+
   const loadEffective = useCallback(async () => {
     try {
       const [min, max] = await Promise.all([
@@ -50,7 +75,6 @@ export function InstanceCard({ instance, onStatusChange }: Props) {
       ]);
       setEffective({ min: intOf(min), max: intOf(max) });
     } catch {
-      // Sin backend (vista previa en navegador): se muestran los overrides locales.
       setEffective({ min: instance.ramMinMb, max: instance.ramMaxMb });
     }
   }, [instance.id, instance.ramMinMb, instance.ramMaxMb]);
@@ -58,6 +82,15 @@ export function InstanceCard({ instance, onStatusChange }: Props) {
   useEffect(() => {
     if (showConfig) void loadEffective();
   }, [showConfig, loadEffective]);
+
+  useEffect(() => {
+    if (showEdit) {
+      setEditName(instance.name);
+      setEditMc(instance.minecraftVersion);
+      setEditUseFabric(instance.fabricLoader != null);
+      setEditFabric(instance.fabricLoader ?? '');
+    }
+  }, [showEdit, instance.name, instance.minecraftVersion, instance.fabricLoader]);
 
   const handleLaunch = async () => {
     setLaunching(true);
@@ -120,6 +153,55 @@ export function InstanceCard({ instance, onStatusChange }: Props) {
     }
   };
 
+  const clearRam = async (key: ConfigKey) => {
+    setSaving(true);
+    try {
+      await clearInstanceConfig(instance.id, key);
+      setMessage({ kind: 'ok', text: 'Ahora se hereda el valor global.' });
+      await loadEffective();
+      onStatusChange();
+    } catch (err) {
+      setMessage({ kind: 'error', text: String(err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleEditSave = async () => {
+    setSaving(true);
+    try {
+      await updateInstance({
+        id: instance.id,
+        name: editName.trim(),
+        minecraftVersion: editMc.trim(),
+        fabricLoader: editUseFabric ? editFabric.trim() || null : null,
+      });
+      setShowEdit(false);
+      setMessage({ kind: 'ok', text: 'Instancia actualizada.' });
+      onStatusChange();
+    } catch (err) {
+      setMessage({ kind: 'error', text: String(err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setSaving(true);
+    try {
+      await deleteInstance(instance.id);
+      setShowDelete(false);
+      onStatusChange();
+    } catch (err) {
+      setMessage({ kind: 'error', text: String(err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const hasMaxOverride = instance.ramMaxMb != null || Boolean(instance.configOverrides.RamMaxMb);
+  const hasMinOverride = instance.ramMinMb != null || Boolean(instance.configOverrides.RamMinMb);
+
   const kindStyles = {
     ok: 'border-[var(--success)] bg-[var(--success)]/10 text-[var(--success)]',
     error: 'border-[var(--danger)] bg-[var(--danger)]/10 text-[var(--danger)]',
@@ -127,38 +209,80 @@ export function InstanceCard({ instance, onStatusChange }: Props) {
   };
 
   return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-sm p-4 flex flex-col gap-3">
+    <div
+      data-testid={`instance-card-${instance.id}`}
+      className="rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-sm p-4 flex flex-col gap-3"
+    >
       <div className="flex flex-col gap-1 min-w-0">
-        <h3 className="font-semibold text-[var(--fg)] truncate">{instance.name}</h3>
-        <p className="text-xs text-[var(--muted)] truncate">
+        <h3 data-testid={`instance-name-${instance.id}`} className="font-semibold text-[var(--fg)] truncate">
+          {instance.name}
+        </h3>
+        <p data-testid={`instance-version-${instance.id}`} className="text-xs text-[var(--muted)] truncate">
           Minecraft {instance.minecraftVersion}
           {instance.fabricLoader ? ` · Fabric Loader ${instance.fabricLoader}` : ' · vanilla'}
         </p>
         <div className="mt-1.5 flex items-center gap-2 text-xs text-[var(--muted)]">
           <span>RAM máx.:</span>
-          <span className="font-mono text-[var(--fg)]">{ramLabel(instance.ramMaxMb)}</span>
+          <span data-testid={`ram-label-${instance.id}`} className="font-mono text-[var(--fg)]">
+            {ramLabel(instance.ramMaxMb)}
+          </span>
         </div>
       </div>
 
+      {message && (
+        <div
+          data-testid={`launch-message-${instance.id}`}
+          className={`px-3 py-1.5 rounded-md text-xs font-medium border ${kindStyles[message.kind]}`}
+        >
+          {message.text}
+        </div>
+      )}
+
       <div className="flex items-center gap-2 w-full justify-end flex-wrap">
-        {message && (
-          <div className={`px-3 py-1.5 rounded-md text-xs font-medium border ${kindStyles[message.kind]}`}>
-            {message.text}
-          </div>
-        )}
         <button
+          data-testid={`edit-instance-${instance.id}`}
+          onClick={() => setShowEdit(true)}
+          className={btnSmall}
+          title="Editar instancia"
+        >
+          <Pencil className="w-3.5 h-3.5 mr-1" />
+          Editar
+        </button>
+        <button
+          data-testid={`delete-instance-${instance.id}`}
+          onClick={() => setShowDelete(true)}
+          className={btnSmall}
+          title="Eliminar instancia"
+        >
+          <Trash2 className="w-3.5 h-3.5 mr-1" />
+          Borrar
+        </button>
+        <button
+          data-testid={`ram-config-${instance.id}`}
           onClick={() => setShowConfig((v) => !v)}
           className={btnSmall}
-          title="Configuración de esta instancia"
+          title="Configuración de RAM de esta instancia"
         >
           <Settings2 className="w-3.5 h-3.5 mr-1" />
           RAM
           {showConfig ? <ChevronUp className="w-3.5 h-3.5 ml-1" /> : <ChevronDown className="w-3.5 h-3.5 ml-1" />}
         </button>
-        <button onClick={handleLaunch} disabled={launching || killing} className={btnPrimary + ' px-4'} title="Lanzar instancia">
+        <button
+          data-testid={`launch-instance-${instance.id}`}
+          onClick={handleLaunch}
+          disabled={launching || killing}
+          className={btnPrimary + ' px-4'}
+          title="Lanzar instancia"
+        >
           {launching ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
         </button>
-        <button onClick={handleKill} disabled={killing || launching} className={btnDanger + ' px-4 sm:px-3'} title="Detener instancia">
+        <button
+          data-testid={`kill-instance-${instance.id}`}
+          onClick={handleKill}
+          disabled={killing || launching}
+          className={btnDanger + ' px-4 sm:px-3'}
+          title="Forzar cierre"
+        >
           <Square className="w-4 h-4" />
         </button>
       </div>
@@ -176,31 +300,63 @@ export function InstanceCard({ instance, onStatusChange }: Props) {
               <label className="block text-xs font-medium text-[var(--fg)] mb-1">RAM mínima (Xms, MB)</label>
               <div className="flex gap-1.5">
                 <input
+                  data-testid={`ram-min-input-${instance.id}`}
                   className={input}
                   value={ramMin}
                   onChange={(e) => setRamMin(e.target.value)}
                   placeholder={String(effective.min ?? 1024)}
                   inputMode="numeric"
                 />
-                <button className={btnSmall} disabled={saving} onClick={() => saveRam('RamMinMb', ramMin)}>
+                <button
+                  data-testid={`ram-min-save-${instance.id}`}
+                  className={btnSmall}
+                  disabled={saving}
+                  onClick={() => saveRam('RamMinMb', ramMin)}
+                >
                   Fijar
                 </button>
               </div>
+              {hasMinOverride && (
+                <button
+                  data-testid={`ram-min-clear-${instance.id}`}
+                  className={`${btnSmall} mt-1.5 w-full`}
+                  disabled={saving}
+                  onClick={() => clearRam('RamMinMb')}
+                >
+                  Usar global / limpiar
+                </button>
+              )}
             </div>
             <div>
               <label className="block text-xs font-medium text-[var(--fg)] mb-1">RAM máxima (Xmx, MB)</label>
               <div className="flex gap-1.5">
                 <input
+                  data-testid={`ram-max-input-${instance.id}`}
                   className={input}
                   value={ramMax}
                   onChange={(e) => setRamMax(e.target.value)}
                   placeholder={String(effective.max ?? 2048)}
                   inputMode="numeric"
                 />
-                <button className={btnSmall} disabled={saving} onClick={() => saveRam('RamMaxMb', ramMax)}>
+                <button
+                  data-testid={`ram-max-save-${instance.id}`}
+                  className={btnSmall}
+                  disabled={saving}
+                  onClick={() => saveRam('RamMaxMb', ramMax)}
+                >
                   Fijar
                 </button>
               </div>
+              {hasMaxOverride && (
+                <button
+                  data-testid={`ram-max-clear-${instance.id}`}
+                  className={`${btnSmall} mt-1.5 w-full`}
+                  disabled={saving}
+                  onClick={() => clearRam('RamMaxMb')}
+                >
+                  Usar global / limpiar
+                </button>
+              )}
             </div>
           </div>
           {warning && pendingForce && (
@@ -215,6 +371,86 @@ export function InstanceCard({ instance, onStatusChange }: Props) {
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {showEdit && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-lg space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="font-semibold">Editar instancia</h4>
+              <button data-testid="edit-cancel" onClick={() => setShowEdit(false)} className={btnSmall} title="Cerrar">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <label className="block text-xs font-medium">Nombre</label>
+            <input
+              data-testid="edit-name"
+              className={input}
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+            />
+            <label className="block text-xs font-medium">Versión de Minecraft</label>
+            <input
+              data-testid="edit-minecraft-version"
+              className={input}
+              value={editMc}
+              onChange={(e) => setEditMc(e.target.value)}
+            />
+            <label className="flex items-center gap-2 text-xs font-medium">
+              <input
+                data-testid="edit-use-fabric"
+                type="checkbox"
+                checked={editUseFabric}
+                onChange={(e) => setEditUseFabric(e.target.checked)}
+              />
+              Usar Fabric Loader
+            </label>
+            <input
+              data-testid="edit-fabric-version"
+              className={input}
+              value={editFabric}
+              disabled={!editUseFabric}
+              onChange={(e) => setEditFabric(e.target.value)}
+              placeholder="0.20.1"
+            />
+            <div className="flex justify-end gap-2 pt-2">
+              <button data-testid="edit-cancel" onClick={() => setShowEdit(false)} className={btnSmall}>
+                Cancelar
+              </button>
+              <button data-testid="edit-save" onClick={handleEditSave} disabled={saving} className={btnSmall}>
+                Guardar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDelete && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm rounded-xl border border-[var(--danger)] bg-[var(--card)] p-5 shadow-lg space-y-3">
+            <h4 className="font-semibold text-[var(--danger)]">¿Eliminar esta instancia?</h4>
+            <p className="text-xs text-[var(--muted)]">
+              Se borrarán su configuración y su carpeta de datos. Esta acción no se puede deshacer.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                data-testid={`cancel-delete-${instance.id}`}
+                onClick={() => setShowDelete(false)}
+                className={btnSmall}
+              >
+                Cancelar
+              </button>
+              <button
+                data-testid={`confirm-delete-${instance.id}`}
+                onClick={handleDelete}
+                disabled={saving}
+                className={`${btnSmall} border-[var(--danger)] text-[var(--danger)]`}
+              >
+                Eliminar
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

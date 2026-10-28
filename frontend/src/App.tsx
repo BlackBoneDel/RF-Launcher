@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { ThemeToggle } from './components/ThemeToggle';
 import { InstanceList } from './components/InstanceList';
 import { CreateInstanceForm } from './components/CreateInstanceForm';
 import { SettingsView } from './components/SettingsView';
-import type { Instance } from './types';
+import type { Instance, JavaProgressEvent } from './types';
 
 type View = 'instances' | 'create' | 'settings';
 
@@ -13,6 +14,7 @@ export default function App() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [ready, setReady] = useState(false);
+  const [javaProgress, setJavaProgress] = useState<JavaProgressEvent | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -26,6 +28,21 @@ export default function App() {
       }
       setReady(true);
     })();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<JavaProgressEvent>('java-download-progress', (event) => {
+      setJavaProgress(event.payload);
+      if (event.payload.stage === 'ready') {
+        window.setTimeout(() => setJavaProgress(null), 1500);
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      if (unlisten) unlisten();
+    };
   }, []);
 
   const refresh = useCallback(async () => {
@@ -91,7 +108,7 @@ export default function App() {
         <div className="flex items-center justify-between px-6 py-3">
           <div className="flex items-center gap-3">
             <span className="font-bold text-[var(--fg)] tracking-tight">RF Launcher</span>
-            <span className="text-xs text-[var(--muted)]">v0.1.0 · Fase 3-A</span>
+            <span className="text-xs text-[var(--muted)]">v0.1.0 · Fase 3-A.2 · sub-ronda 1</span>
           </div>
           <div className="flex items-center gap-3">
             <ThemeToggle theme={theme} onChange={handleThemeChange} />
@@ -104,6 +121,32 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {javaProgress && (
+        <div
+          data-testid="java-progress"
+          className="mx-6 mt-4 rounded-md border border-[var(--border)] bg-[var(--card)] p-3 text-sm"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span>{javaProgress.message || `Descargando Java ${javaProgress.version}…`}</span>
+            <span className="font-mono text-xs">
+              {javaProgress.percent != null
+                ? `${javaProgress.percent}%`
+                : javaProgress.totalBytes != null
+                  ? `${javaProgress.downloadedBytes}/${javaProgress.totalBytes} bytes`
+                  : javaProgress.stage}
+            </span>
+          </div>
+          {javaProgress.percent != null && (
+            <div className="mt-2 h-2 rounded bg-[var(--border)] overflow-hidden">
+              <div
+                className="h-full bg-[var(--accent)]"
+                style={{ width: `${javaProgress.percent}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       <main className="p-6">
         {view === 'instances' && (

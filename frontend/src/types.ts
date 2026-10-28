@@ -47,3 +47,33 @@ export interface RamCheck {
   ok: boolean;
   warning?: string;
 }
+
+/** Evento real emitido por Rust durante la descarga de Java. */
+export interface JavaProgressEvent {
+  version: number;
+  stage: string;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  percent: number | null;
+  message: string;
+}
+
+export interface CatalogEnvelope {
+  sourceUrl: string;
+  fetchedAt: string;
+  sha256: string;
+  payload: unknown;
+}
+
+export interface CatalogVersion {
+  id: string;
+  versionType: string;
+  url: string;
+}
+
+export interface FabricLoaderInfo {
+  version: string;
+  stable: boolean;
+  maven: string;
+  mainClass: string;
+}

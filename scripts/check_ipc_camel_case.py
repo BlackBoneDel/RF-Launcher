@@ -20,9 +20,20 @@ STRUCTS = {
     "RamCheck": "src-tauri/src/commands.rs",
     "LaunchResult": "src-tauri/src/commands.rs",
     "KillResult": "src-tauri/src/launcher.rs",
+    "JavaProgressPayload": "src-tauri/src/commands.rs",
+    "CatalogEnvelope": "src-tauri/src/catalog.rs",
+    "CatalogVersion": "src-tauri/src/catalog.rs",
+    "FabricLoaderInfo": "src-tauri/src/catalog.rs",
 }
 TS_TYPES = ROOT / "frontend" / "src" / "types.ts"
-NON_PERSISTED_STRUCTS = {"LaunchResult", "KillResult"}
+NON_PERSISTED_STRUCTS = {
+    "LaunchResult",
+    "KillResult",
+    "JavaProgressPayload",
+    "CatalogEnvelope",
+    "CatalogVersion",
+    "FabricLoaderInfo",
+}
 PERSISTENCE_MODULES = [
     "instance.rs",
     "config.rs",
@@ -44,7 +55,7 @@ def struct_block(source: str, name: str) -> str:
     pattern = (
         r"^#\[derive\([^\]]*\)\]\s*"
         r"(?:^#\[serde\([^\]]*\)\]\s*)*"
-        r"^pub struct " + re.escape(name) + r"\s*\{"
+        r"^(?:pub )?struct " + re.escape(name) + r"\s*\{"
     )
     match = re.search(pattern, source, re.MULTILINE)
     if not match:
@@ -79,7 +90,7 @@ def main() -> int:
         if bad_renames:
             errors.append(f"{name}: rename snake_case {bad_renames}")
 
-        fields = re.findall(r"^\s*pub\s+([a-z][a-z0-9_]*)\s*:", block, re.MULTILINE)
+        fields = re.findall(r"^\s*(?:pub\s+)?([a-z][a-z0-9_]*)\s*:", block, re.MULTILINE)
         if not fields:
             errors.append(f"{name}: no se detectaron campos")
         for field in fields:

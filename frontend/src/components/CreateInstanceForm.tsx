@@ -66,6 +66,7 @@ export function CreateInstanceForm({ onSubmit, onBack }: Props) {
         <div>
           <label className="block text-sm font-medium text-[var(--fg)] mb-1">Nombre de la instancia</label>
           <input
+            data-testid="instance-name"
             className={input}
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -77,6 +78,7 @@ export function CreateInstanceForm({ onSubmit, onBack }: Props) {
         <div>
           <label className="block text-sm font-medium text-[var(--fg)] mb-1">Versión de Minecraft</label>
           <input
+            data-testid="minecraft-version"
             className={input}
             value={minecraftVersion}
             onChange={(e) => setMinecraftVersion(e.target.value)}
@@ -91,6 +93,7 @@ export function CreateInstanceForm({ onSubmit, onBack }: Props) {
         <div className="flex items-center gap-3">
           <input
             id="fabric"
+            data-testid="use-fabric"
             type="checkbox"
             className="rounded border-[var(--border)] bg-[var(--card)] text-[var(--accent)] focus:ring-[var(--ring)]"
             checked={useFabric}
@@ -101,6 +104,7 @@ export function CreateInstanceForm({ onSubmit, onBack }: Props) {
           </label>
           <span className="text-[var(--muted)] text-xs mx-2">·</span>
           <input
+            data-testid="fabric-version"
             className={`${input} w-32`}
             value={fabricVersion}
             onChange={(e) => setFabricVersion(e.target.value)}
@@ -113,7 +117,7 @@ export function CreateInstanceForm({ onSubmit, onBack }: Props) {
           <button type="button" onClick={onBack} className={btn}>
             Cancelar
           </button>
-          <button type="submit" disabled={submitting} className={btnPrimary}>
+          <button data-testid="create-instance-submit" type="submit" disabled={submitting} className={btnPrimary}>
             {submitting ? 'Creando…' : 'Crear instancia'}
           </button>
         </div>

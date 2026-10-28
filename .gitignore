@@ -24,3 +24,10 @@ Thumbs.db
 # Logs de lanzamientos de instancias (fuera del repo)
 *.log
 !src-tauri/src/**/*.rs
+
+# E2E (Fase 3-A.2)
+e2e/node_modules/
+.e2e-data/
+.e2e-java.pid
+.e2e-jdk.tar.gz
+.e2e-home/

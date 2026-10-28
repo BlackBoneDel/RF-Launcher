@@ -27,6 +27,19 @@ export async function createInstance(values: {
   return invoke('create_instance', values);
 }
 
+export async function updateInstance(values: {
+  id: string;
+  name: string;
+  minecraftVersion: string;
+  fabricLoader: string | null;
+}): Promise<Instance> {
+  return invoke('update_instance', values);
+}
+
+export async function deleteInstance(id: string): Promise<void> {
+  return invoke('delete_instance', { id });
+}
+
 export async function getInstance(id: string): Promise<Instance> {
   return invoke('get_instance', { id });
 }
@@ -43,6 +56,10 @@ export async function setGlobalConfig(
   return invoke('set_global_config', { key, value, force });
 }
 
+export async function getGlobalConfig(key: ConfigKey): Promise<ConfigValue> {
+  return invoke('get_global_config', { key });
+}
+
 export async function setInstanceConfig(
   instanceId: string,
   key: ConfigKey,
@@ -50,6 +67,13 @@ export async function setInstanceConfig(
   force = false,
 ): Promise<RamCheck> {
   return invoke('set_instance_config', { instanceId, key, value, force });
+}
+
+export async function clearInstanceConfig(
+  instanceId: string,
+  key: ConfigKey,
+): Promise<RamCheck> {
+  return invoke('clear_instance_config', { instanceId, key });
 }
 
 export async function getSystemRam(): Promise<RamCheck> {

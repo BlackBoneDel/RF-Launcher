@@ -362,6 +362,36 @@ jobs:
       # Los logs/artefactos de GitHub redirigen a un blob host que no siempre es
       # alcanzable. Las anotaciones SÍ se leen por API, así que publicamos aquí
       # los números que el informe necesita como evidencia verificable.
+      # Artefacto temporal para retest de PR #9: solo el push de esta rama,
+      # sin feature e2e ni publicación de Release oficial. Retirar tras el retest.
+      - name: Compilar y verificar ejecutable Windows para retest
+        if: runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/arena/df230d38-rf-launcher'
+        working-directory: src-tauri
+        run: |
+          set -euo pipefail
+          npx --yes @tauri-apps/cli@2.12.4 build --ci --no-sign --no-bundle
+          mkdir -p ../windows-retest
+          cp "target/release/RF Launcher.exe" "../windows-retest/RF Launcher.exe"
+          python3 ../scripts/check_release_binary.py "../windows-retest/RF Launcher.exe" release
+          python3 - <<'PYCODE'
+          import hashlib
+          from pathlib import Path
+          exe = Path('../windows-retest/RF Launcher.exe')
+          digest = hashlib.sha256(exe.read_bytes()).hexdigest()
+          Path('../windows-retest/SHA256SUMS.txt').write_text(f'{digest}  RF Launcher.exe\n', encoding='utf-8')
+          print(f'WINDOWS_RETEST_SHA256={digest}')
+          print(f'WINDOWS_RETEST_SIZE={exe.stat().st_size}')
+          PYCODE
+
+      - name: Subir ejecutable Windows para retest de PR #9
+        if: runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/arena/df230d38-rf-launcher'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rf-launcher-pr9-windows-retest
+          path: windows-retest/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Publicar evidencia medible de esta corrida
         if: always()
         run: |
@@ -477,6 +507,140 @@ jobs:
 # 40444478091 para cerrar #4/#5/#6 tras el 403 del token de integración.
 # Se retiró en la auditoría posterior: su marcador en el mensaje de commit era
 # reproducible por accidente; el permiso de escritura de issues ya no vive aquí.
+
+  # Módulo A / Fase 3-A.2 sub-ronda 1: E2E real Linux-only.
+  # No usa mocks de invoke: compila el binario con --features e2e, lo lanza
+  # mediante tauri-driver + WebKitWebDriver bajo xvfb y dispara clicks reales.
+  e2e-linux:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/build-v'))
+    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache de compilación Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: "rf-launcher-e2e-linux"
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            e2e/package-lock.json
+
+      - name: Dependencias de sistema + WebKitWebDriver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            xvfb webkit2gtk-driver tar
+          command -v WebKitWebDriver || command -v webkit2gtk-driver || true
+
+      - name: Instalar dependencias de frontend
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build del frontend
+        run: npm run build
+        working-directory: frontend
+
+      - name: Instalar dependencias E2E
+        run: npm ci
+        working-directory: e2e
+
+      - name: Instalar tauri-driver
+        run: cargo install tauri-driver --locked
+
+      - name: Validar fixtures de catálogo (offline)
+        run: python3 scripts/verify_catalog_fixtures.py
+
+      - name: "Smoke de red real - Mojang v2 + Fabric meta"
+        run: python3 scripts/verify_catalog_fixtures.py --live
+
+      - name: Inspeccionar binario Release sin feature E2E
+        working-directory: src-tauri
+        run: |
+          set -e
+          npx --yes @tauri-apps/cli@2.12.4 build --ci --no-sign --no-bundle
+          python3 ../scripts/check_release_binary.py "target/release/RF Launcher" release
+
+      - name: Compilar binario E2E con recursos embebidos (NO bundle)
+        id: compile_e2e
+        run: |
+          test -s ../frontend/dist/index.html
+          echo "E2E_DIST_INDEX_SHA256=$(sha256sum ../frontend/dist/index.html)"
+          find ../frontend/dist -type f -printf 'E2E_DIST_FILE=%p %s bytes\n'
+          echo "E2E_TAURI_ENV_DEBUG=${TAURI_ENV_DEBUG-<unset>}"
+          cargo tree --locked --features e2e,custom-protocol -e features -i tauri | grep -E 'custom-protocol|rf-launcher'
+          cargo build --locked --release --features e2e,custom-protocol
+          python3 ../scripts/check_release_binary.py target/release/rf-launcher e2e
+        working-directory: src-tauri
+
+      - name: Mutaciones negativas Java y assets de lanzamiento
+        run: python3 scripts/check_mutations.py
+
+      - name: Intento E2E Minecraft Fabric y JVM reales
+        env:
+          RUST_BACKTRACE: "1"
+          TAURI_DRIVER: /home/runner/.cargo/bin/tauri-driver
+          WEBKIT_WEBDRIVER: /usr/bin/WebKitWebDriver
+        run: |
+          set -o pipefail
+          xvfb-run -a npx wdio run ./wdio.real.conf.js 2>&1 | tee wdio-real.log
+        working-directory: e2e
+
+      - name: E2E real UI -> IPC -> backend (xvfb)
+        if: always() && steps.compile_e2e.outcome == 'success'
+        env:
+          RUST_BACKTRACE: "1"
+          TAURI_DRIVER: /home/runner/.cargo/bin/tauri-driver
+          WEBKIT_WEBDRIVER: /usr/bin/WebKitWebDriver
+        run: |
+          set -o pipefail
+          xvfb-run -a npm test 2>&1 | tee wdio.log
+        working-directory: e2e
+
+      - name: Repetir suite E2E de aislamiento (2 corridas)
+        if: always() && steps.compile_e2e.outcome == 'success'
+        env:
+          RUST_BACKTRACE: "1"
+          TAURI_DRIVER: /home/runner/.cargo/bin/tauri-driver
+          WEBKIT_WEBDRIVER: /usr/bin/WebKitWebDriver
+        run: |
+          set -o pipefail
+          for n in 2 3; do
+            echo "E2E_REPEAT_RUN=$n"
+            xvfb-run -a npm test 2>&1 | tee "wdio-repeat-$n.log"
+            if grep -i 'stale element' "wdio-repeat-$n.log"; then
+              echo "E2E_STALE_ELEMENT_RUN=$n PRESENT=true"
+            else
+              echo "E2E_STALE_ELEMENT_RUN=$n PRESENT=false"
+            fi
+          done
+        working-directory: e2e
+
+      - name: Subir logs E2E
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-linux-logs
+          include-hidden-files: true
+          path: |
+            e2e/wdio.log
+            e2e/wdio-repeat-*.log
+            e2e/wdio-real.log
+            .e2e-home/**/*.log
+            .e2e-java.pid
+          if-no-files-found: ignore
 
   # ------------------------- Release controlado -------------------------
   # Estos dos jobs viven en el MISMO workflow para no reintroducir un segundo
