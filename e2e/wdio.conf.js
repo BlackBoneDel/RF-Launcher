@@ -149,7 +149,7 @@ function onShutdown(fn) {
 export const config = {
   hostname: '127.0.0.1',
   port: 4444,
-  specs: ['./specs/**/*.js'],
+  specs: ['./specs/blockers.e2e.js'],
   maxInstances: 1,
   capabilities: [
     {

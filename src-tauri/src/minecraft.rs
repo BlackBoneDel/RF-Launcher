@@ -9,8 +9,8 @@ use sha1::{Digest, Sha1};
 use crate::error::{LauncherError, Result};
 
 const MOJANG_VERSION_MANIFEST: &str =
-    "https://launchermeta.mojang.com/mc/game/version_manifest.json";
-const FABRIC_MAVEN: &str = "https://maven.fabricmc.net/net/fabricmc/fabric-loader";
+    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+const FABRIC_META: &str = "https://meta.fabricmc.net/v2/versions/loader";
 
 /// Datos resueltos para lanzar una versión de Minecraft (vanilla o con Fabric).
 pub struct ResolvedLaunch {
@@ -59,6 +59,9 @@ pub async fn resolve(
         return resolve_fixture(instances_dir, instance_id);
     }
 
+    if !minecraft_version.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c)) || minecraft_version.is_empty() {
+        return Err("versión de Minecraft inválida".into());
+    }
     fs::create_dir_all(assets_dir)?;
     let version_dir = assets_dir.join("versions").join(minecraft_version);
     fs::create_dir_all(&version_dir)?;
@@ -98,9 +101,9 @@ pub async fn resolve(
     let version_json: Value = serde_json::from_str(&version_json_text)?;
 
     let main_class = version_json
-        .get("main_class")
+        .get("mainClass")
         .and_then(|v| v.as_str())
-        .ok_or("version_json sin main_class")?
+        .ok_or("version_json sin mainClass")?
         .to_string();
 
     // 3. Librerías: filtrar por reglas de SO, descargar artefactos, construir classpath.
@@ -122,7 +125,7 @@ pub async fn resolve(
         // Artefacto principal
         if let Some(artifact) = downloads.and_then(|d| d.get("artifact")) {
             if let Some(url) = artifact.get("url").and_then(|v| v.as_str()) {
-                let path = lib
+                let path = artifact
                     .get("path")
                     .and_then(|v| v.as_str())
                     .ok_or("librería sin path")?;
@@ -162,20 +165,33 @@ pub async fn resolve(
     download_file(client_url, &client_jar, client_sha1).await?;
     classpath.push(client_jar.clone());
 
-    // 5. Fabric Loader: su jar va al frente del classpath y su main class
-    //    reemplaza a la de vanilla, recibiendo la original por propiedad de sistema.
+    // Fabric Meta expone un perfil que incluye launcherMeta.libraries (common
+    // y client), intermediary y loader, además de la mainClass del cliente.
     let (main_class, jvm_args) = if let Some(loader_version) = fabric_loader {
-        let loader_jar = assets_dir
-            .join("fabric-loader")
-            .join(format!("fabric-loader-{loader_version}.jar"));
-        fs::create_dir_all(loader_jar.parent().unwrap())?;
-        if !loader_jar.exists() {
-            let loader_url = format!("{FABRIC_MAVEN}/{loader_version}/fabric-loader-{loader_version}.jar");
-            download_file(&loader_url, &loader_jar, None).await?;
+        if loader_version.is_empty() || !loader_version.chars().all(|c| c.is_ascii_alphanumeric() || ".-_+".contains(c)) {
+            return Err("versión Fabric inválida".into());
         }
-        classpath.insert(0, loader_jar);
-        let extra = vec![format!("-Dfabric.mainClass={main_class}")];
-        ("net.fabricmc.loader.impl.launch.knot.KnotClient".to_string(), extra)
+        let url = format!("{FABRIC_META}/{minecraft_version}/{loader_version}/profile/json");
+        let profile: Value = reqwest::Client::new().get(&url).send().await?.error_for_status()?.json().await?;
+        let fabric_main = profile.get("mainClass").and_then(Value::as_str).ok_or("Fabric sin mainClass")?.to_string();
+        let libs = profile.get("libraries").and_then(Value::as_array).ok_or("Fabric sin libraries")?;
+        let mut fabric_paths = Vec::new();
+        for lib in libs {
+            let name = lib.get("name").and_then(Value::as_str).ok_or("Fabric sin coordenada Maven")?;
+            let parts: Vec<_> = name.split(':').collect();
+            if parts.len() != 3 || parts.iter().any(|p| p.is_empty() || !p.chars().all(|c| c.is_ascii_alphanumeric() || ".-_+".contains(c))) {
+                return Err(format!("coordenada Maven inválida: {name}").into());
+            }
+            let relative = format!("{}/{}/{}/{}-{}.jar", parts[0].replace('.', "/"), parts[1], parts[2], parts[1], parts[2]);
+            let base = lib.get("url").and_then(Value::as_str).unwrap_or("https://maven.fabricmc.net/");
+            if base != "https://maven.fabricmc.net/" { return Err("repositorio Fabric no permitido".into()); }
+            let dest = lib_dir.join(&relative);
+            download_file(&format!("{base}{relative}"), &dest, lib.get("sha1").and_then(Value::as_str)).await?;
+            fabric_paths.push(dest);
+        }
+        fabric_paths.extend(classpath);
+        classpath = fabric_paths;
+        (fabric_main, Vec::new())
     } else {
         (main_class, Vec::new())
     };
@@ -235,7 +251,15 @@ pub async fn resolve(
         .and_then(|v| v.as_array())
         .map(|arr| resolve_json_args(arr, &ctx))
         .unwrap_or_default();
-    jvm_args_all.retain(|a| !(a.starts_with("-Xms") || a.starts_with("-Xmx")));
+    let mut clean_jvm = Vec::new();
+    let mut skip_next = false;
+    for arg in jvm_args_all {
+        if skip_next { skip_next = false; continue; }
+        if arg == "-cp" || arg == "-classpath" { skip_next = true; continue; }
+        if arg.starts_with("-Xms") || arg.starts_with("-Xmx") { continue; }
+        clean_jvm.push(arg);
+    }
+    let mut jvm_args_all = clean_jvm;
     jvm_args_all.extend(jvm_args);
 
     fs::create_dir_all(&game_dir)?;
