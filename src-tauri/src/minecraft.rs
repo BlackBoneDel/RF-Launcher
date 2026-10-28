@@ -233,7 +233,7 @@ pub async fn resolve(
         // login; aquí son valores neutros, no credenciales niOAuth.
         auth_player_name: "Player".to_string(),
         auth_uuid: "00000000-0000-0000-0000-000000000000".to_string(),
-        auth_access_token: String::new(),
+        auth_access_token: "0".to_string(),
         user_type: "mojang".to_string(),
         user_properties: "{}".to_string(),
         resolution_width: "854".to_string(),
@@ -281,6 +281,13 @@ pub async fn resolve(
             })
             .unwrap_or_default(),
     };
+
+    // Rechazar argumentos desconocidos antes de crear un proceso con datos rotos.
+    for arg in jvm_args_all.iter().chain(game_args.iter()) {
+        if arg.contains("${") {
+            return Err(LauncherError::Custom(format!("placeholder de lanzamiento sin resolver: {arg}")));
+        }
+    }
 
     let log_file = instances_dir
         .join(instance_id.to_string())
@@ -486,6 +493,11 @@ fn substitute(arg: &str, ctx: &LaunchContext) -> String {
     repl!("${auth_uuid}", ctx.auth_uuid);
     repl!("${auth_access_token}", ctx.auth_access_token);
     repl!("${auth_session}", ctx.auth_access_token);
+    // Placeholder de identidad offline — NO es sistema de cuentas, reservado a Fase 3-C.
+    repl!("${clientid}", "0");
+    repl!("${auth_xuid}", "0");
+    repl!("${launcher_name}", "rf-launcher");
+    repl!("${launcher_version}", env!("CARGO_PKG_VERSION"));
     repl!("${user_type}", ctx.user_type);
     repl!("${user_properties}", ctx.user_properties);
     repl!("${version_name}", ctx.version_name);
@@ -535,6 +547,8 @@ mod tests {
             substitute("${version_name} ${auth_player_name}", &ctx),
             "1.20.1 Player"
         );
+        assert_eq!(substitute("${clientid} ${auth_xuid} ${launcher_name} ${launcher_version}", &ctx),
+            format!("0 0 rf-launcher {}", env!("CARGO_PKG_VERSION")));
         assert_eq!(
             substitute("--gameDir ${game_directory}", &ctx),
             "--gameDir /tmp/game"

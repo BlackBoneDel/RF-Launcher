@@ -33,7 +33,7 @@ describe('Minecraft Fabric real — UI, JVM y PID', () => {
           try {
             const exe = fs.readlinkSync(`/proc/${entry}/exe`);
             if (!exe.includes('/java/jdk-21/bin/java')) continue;
-            const args = fs.readFileSync(`/proc/${entry}/cmdline`).toString().split('\0').filter(Boolean);
+            const args = fs.readFileSync(`/proc/${entry}/cmdline`).toString().replace(/\0$/, '').split('\0');
             if (args.includes('net.fabricmc.loader.impl.launch.knot.KnotClient')) {
               observed = { pid: Number(entry), exe, args };
               console.log(`E2E_OBSERVED_JVM=${JSON.stringify(observed)}`);
@@ -58,6 +58,9 @@ describe('Minecraft Fabric real — UI, JVM y PID', () => {
       const { exe, args } = observed;
       console.log(`E2E_JVM_PID=${pid} EXE=${exe}`);
       console.log(`E2E_JVM_ARGS=${JSON.stringify(args)}`);
+      assert.ok(args.every(arg => !arg.includes('${')), 'Quedan placeholders sin resolver');
+      const tokenIndex = args.indexOf('--accessToken');
+      assert.ok(tokenIndex >= 0 && args[tokenIndex + 1] && !args[tokenIndex + 1].startsWith('--'), 'accessToken vacío o malformado');
       assert.equal(path.basename(exe), 'java');
       assert.ok(exe.includes('/java/jdk-21/'), 'No es el JDK gestionado por JavaManager');
       const cpIndex = args.indexOf('-cp');
@@ -70,10 +73,12 @@ describe('Minecraft Fabric real — UI, JVM y PID', () => {
       for (const file of fs.readdirSync(logs)) {
         const content = fs.readFileSync(path.join(logs, file), 'utf8');
         if (content) {
-          console.log(`E2E_JVM_LOG=${content.slice(0, 3000)}`);
+          console.log(`E2E_JVM_LOG=${content}`);
           assert.ok(/Loading Minecraft/i.test(content), 'No hay log de arranque de Fabric; un error JVM no demuestra arranque');
         }
       }
+      await browser.pause(15000);
+      assert.ok(fs.existsSync(`${proc}/stat`), 'Minecraft terminó antes de la observación de 15 segundos');
       const state = fs.readFileSync(`${proc}/stat`, 'utf8').match(/^\d+ \(.*\) (\S)/)?.[1];
       assert.ok(state && state !== 'Z', `JVM no está viva antes de kill: state=${state}`);
       console.log(`E2E_JVM_STATE_BEFORE_KILL=${state}`);
@@ -88,7 +93,7 @@ describe('Minecraft Fabric real — UI, JVM y PID', () => {
         const logs = path.join(instances, id, 'logs');
         if (fs.existsSync(logs)) for (const file of fs.readdirSync(logs)) {
           const content = fs.readFileSync(path.join(logs, file), 'utf8');
-          if (content) console.log(`E2E_DIAGNOSTIC_LOG=${content.slice(0, 6000)}`);
+          if (content) console.log(`E2E_DIAGNOSTIC_LOG_BEGIN=${file}\n${content}\nE2E_DIAGNOSTIC_LOG_END=${file}`);
         }
       }
       const cleanupPid = pid || observed?.pid;
