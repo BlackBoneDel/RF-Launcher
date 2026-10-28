@@ -573,7 +573,10 @@ mod tests {
                 { "action": "allow", "os": { "name": "windows" } }
             ]
         });
-        // target_arch() puede ser x64 o aarch64; sin restricción de arch pasa en cualquier arch
-        assert!(rules_apply(&lib));
+        // La lista permite Linux y Windows, pero no macOS.
+        assert_eq!(rules_apply(&lib), !cfg!(target_os = "macos"));
+        let current = if cfg!(target_os = "macos") { "osx" } else if cfg!(target_os = "windows") { "windows" } else { "linux" };
+        let matching = serde_json::json!({"rules": [{"action": "allow", "os": {"name": current}}]});
+        assert!(rules_apply(&matching));
     }
 }
