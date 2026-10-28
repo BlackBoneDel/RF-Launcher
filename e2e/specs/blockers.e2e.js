@@ -105,6 +105,18 @@ describe('Fase 3-A.2 sub-ronda 1 — bloqueantes UI → IPC → backend', () => 
     console.log(`EDIT_RESULT=${await result.isExisting() ? await result.getText() : '<none>'}`);
     console.log(`EDIT_DISK=${JSON.stringify(readInstance(instanceId))}`);
     console.log(`EDIT_DOM=${await browser.$(`[data-testid="instance-name-${instanceId}"]`).getText()}`);
+    console.log(`EDIT_TRACE=${JSON.stringify(await browser.execute(async (id) => {
+      const el = document.querySelector(`[data-testid="instance-name-${id}"]`);
+      const card = document.querySelector(`[data-testid="instance-card-${id}"]`);
+      const rect = el?.getBoundingClientRect();
+      const style = el && getComputedStyle(el);
+      const list = await window.__TAURI_INTERNALS__.invoke('list_instances');
+      return { textContent: el?.textContent, innerText: el?.innerText, outerHTML: el?.outerHTML,
+        rect: rect && { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        style: style && { display: style.display, visibility: style.visibility, overflow: style.overflow },
+        viewport: { width: innerWidth, height: innerHeight }, cardHTML: card?.outerHTML,
+        formOpen: !!document.querySelector('[data-testid="edit-save"]'), list };
+    }, instanceId))}`);
 
     await waitForText(`instance-name-${instanceId}`, 'E2E Editada');
     await waitForText(`instance-version-${instanceId}`, '1.21.1');
